@@ -1,0 +1,38 @@
+<html>
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta name="author" content="Jesper Cockx" />
+  <meta name="date" content="2014" />
+  <title>Pattern matching without K</title> 
+</head>
+<body>
+
+<h1>Pattern matching without K</h1>
+
+This page contains supplementary material for our ICFP 2014 paper titled "Pattern matching without K" (<a href="Pattern-matching-without-K.pdf">draft</a>).
+
+<h2>Download</h2>
+<p>The implementation of our criterion for pattern matching without K is part of Agda as of version 2.4. Installation instructions can be found in <a href="http://code.haskell.org/Agda/README">the Agda README</a>.</p>
+
+<p><b>Usage.</b>
+Open a .agda file in emacs, add the line <code>{-# OPTIONS --without-K #-}</code> at the top, and load it by pressing C-c C-l. All definitions by pattern matching in this file will now be checked for hidden uses of the K axiom (in addition to the regular Agda typechecking).</p>
+
+<h2>Examples (Agda files)</h2>
+The file <a href="Examples.agda"><code>Examples.agda</code></a> contains various examples of definitions by pattern matching from the paper that are accepted by our criterion. 
+
+Meanwhile, the file <a href="Fail.agda"><code>Fail.agda</code></a> contains a number of examples that are rejected because they depend (directly or indirectly) on the K axiom.
+
+<h2>Side notes to the proof (Agda files)</h2>
+Some Agda files illustrating (parts of) the proof in our paper can be downloaded <a href="Agda-Proof.tar.gz">here</a>.
+
+<h2>Authors</h2>
+Comments and questions are welcome at the following addresses:
+<ul>
+<li><a href="http://distrinet.cs.kuleuven.be/people/jesper">Jesper Cockx</a> &lt;jesper &lt;dot&gt; cockx &lt;at&gt; cs &lt;dot&gt; kuleuven &lt;dot&gt; be&gt;</li>
+<li><a href="http://distrinet.cs.kuleuven.be/people/dominiqu">Dominique Devriese</a> &lt;dominique &lt;dot&gt; devriese &lt;at&gt; cs &lt;dot&gt; kuleuven &lt;dot&gt; be&gt;</li>
+<li><a href="http://distrinet.cs.kuleuven.be/people/frank">Frank Piessens</a> &lt;frank &lt;dot&gt; piessens &lt;at&gt; cs &lt;dot&gt; kuleuven &lt;dot&gt; be&gt;</li>
+</ul>
+
+
+</body>
+</html>

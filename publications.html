@@ -1,0 +1,20 @@
+---
+title: My publications
+---
+
+<h2>Papers and abstracts</h2>
+
+$for(publications)$
+  <p>
+    $authors$. $date$. <i>$title$</i>. $description$$if(pdf)$ (<a href="$pdf$">PDF</a>)$endif$$if(slides)$ (<a href="$slides$">slides</a>)$endif$.
+  </p>
+$endfor$
+
+<h2>Talks</h2>
+
+$for(talks)$
+  <p>
+    $date$. <i>$title$</i>. $description$$if(slides)$ (<a href="$slides$">slides</a>)$endif$.
+  </p>
+$endfor$
+

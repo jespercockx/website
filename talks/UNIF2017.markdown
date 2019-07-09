@@ -1,0 +1,6 @@
+---
+date: 2017-09-03
+title: 'Depending on equations: A proof-relevant framework for unification in dependent type theory'
+description: Invited talk at the 31st International Workshop on Unification in Oxford
+slides: /files/UNIF2017-presentation.pdf
+---

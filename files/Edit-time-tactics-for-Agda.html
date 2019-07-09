@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="generator" content="pandoc">
+  <meta name="author" content="Jesper Cockx">
+  <meta name="dcterms.date" content="2019-02-06">
+  <title>Edit-time tactics for Agda</title>
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, minimal-ui">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/3.7.0//css/reveal.css">
+  <style type="text/css">
+      code{white-space: pre-wrap;}
+      span.smallcaps{font-variant: small-caps;}
+      span.underline{text-decoration: underline;}
+      div.column{display: inline-block; vertical-align: top; width: 50%;}
+  </style>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/3.7.0//css/theme/black.css" id="theme">
+  <link rel="stylesheet" href="Agda.css"/>
+  <link rel="stylesheet" href="theme.css"/>
+  <!-- Printing and PDF exports -->
+  <script>
+    var link = document.createElement( 'link' );
+    link.rel = 'stylesheet';
+    link.type = 'text/css';
+    link.href = window.location.search.match( /print-pdf/gi ) ? 'https://cdnjs.cloudflare.com/ajax/libs/reveal.js/3.7.0//css/print/pdf.css' : 'https://cdnjs.cloudflare.com/ajax/libs/reveal.js/3.7.0//css/print/paper.css';
+    document.getElementsByTagName( 'head' )[0].appendChild( link );
+  </script>
+  <!--[if lt IE 9]>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/3.7.0//lib/js/html5shiv.js"></script>
+  <![endif]-->
+</head>
+<body>
+  <div class="reveal">
+    <div class="slides">
+
+<section id="title-slide">
+  <h1 class="title">Edit-time tactics for Agda</h1>
+  <p class="subtitle">Talk at Petit-déj Gallinette in Nantes</p>
+  <p class="author">Jesper Cockx</p>
+  <p class="date">6 February 2019</p>
+</section>
+
+<section id="introduction" class="slide level1">
+<h1>Introduction</h1>
+<h2 id="wait-whats-agda-again">Wait, what’s Agda again?</h2>
+<!--
+<pre class="Agda"><a id="202" class="Symbol">{-#</a> <a id="206" class="Keyword">OPTIONS</a> <a id="214" class="Pragma">--allow-unsolved-metas</a> <a id="237" class="Symbol">#-}</a>
+
+<a id="242" class="Keyword">open</a> <a id="247" class="Keyword">import</a> <a id="254" href="Prelude.html" class="Module">Prelude</a> <a id="262" class="Keyword">hiding</a> <a id="269" class="Symbol">(</a><a id="270" href="Prelude.Monad.Indexed.html#315" class="Field Operator">_&gt;&gt;=_</a><a id="275" class="Symbol">;</a> <a id="277" href="Prelude.Monad.Indexed.html#415" class="Function Operator">_&gt;&gt;_</a><a id="281" class="Symbol">;</a> <a id="283" href="Prelude.Int.Core.html#1244" class="Function">abs</a><a id="286" class="Symbol">;</a> <a id="288" href="Agda.Builtin.Nat.html#196" class="InductiveConstructor">suc</a><a id="291" class="Symbol">)</a> <a id="293" class="Keyword">renaming</a> <a id="302" class="Symbol">(</a><a id="303" href="Prelude.Monad.Indexed.html#1108" class="Field Operator">_&gt;&gt;=′_</a> <a id="310" class="Symbol">to</a> <a id="313" href="Prelude.Monad.Indexed.html#1108" class="Field Operator">_&gt;&gt;=_</a><a id="318" class="Symbol">;</a> <a id="320" href="Prelude.Monad.Indexed.html#1240" class="Function Operator">_&gt;&gt;′_</a> <a id="326" class="Symbol">to</a> <a id="329" href="Prelude.Monad.Indexed.html#1240" class="Function Operator">_&gt;&gt;_</a><a id="333" class="Symbol">)</a>
+<a id="335" class="Keyword">open</a> <a id="340" href="Agda.Builtin.Nat.html#165" class="Module">Prelude.Nat</a>
+
+<a id="353" class="Keyword">open</a> <a id="358" class="Keyword">import</a> <a id="365" href="Tactic.Reflection.html" class="Module">Tactic.Reflection</a> <a id="383" class="Keyword">using</a> <a id="389" class="Symbol">(</a><a id="390" href="Builtin.Reflection.html#2708">vArg</a><a id="394" class="Symbol">)</a>
+
+<a id="397" class="Keyword">open</a> <a id="402" class="Keyword">import</a> <a id="409" href="Ataca.Core.html" class="Module">Ataca.Core</a>
+<a id="420" class="Keyword">open</a> <a id="425" class="Keyword">import</a> <a id="432" href="Ataca.Utils.html" class="Module">Ataca.Utils</a>
+<a id="444" class="Keyword">open</a> <a id="449" class="Keyword">import</a> <a id="456" href="Ataca.Tactics.BasicTactics.html" class="Module">Ataca.Tactics.BasicTactics</a>
+
+<a id="484" class="Keyword">module</a> <a id="491" href="slides.html" class="Module">_</a> <a id="493" class="Keyword">where</a>
+</pre>-->
+<p>Agda is a <strong>functional programming language</strong> like Haskell, except:</p>
+<ul>
+<li>Agda is <em>strongly typed</em></li>
+<li>Agda has <em>no side effects</em></li>
+</ul>
+<div class="fragment">
+<p>It is also a <strong>proof assistant</strong> like Coq, except:</p>
+<ul>
+<li>It supports <em>indexed datatypes</em></li>
+<li>It has <em>readable proof terms</em></li>
+</ul>
+</div>
+<h2 id="interactive-commands-in-agda">Interactive commands in Agda</h2>
+<ul>
+<li><code>C-c C-SPC</code>: <em>give</em> a term</li>
+<li><code>C-c C-r</code>: <em>refine</em> the goal</li>
+<li><code>C-c C-c</code>: <em>case split</em> on a variable</li>
+<li><code>C-c C-a</code>: <em>automatically</em> fill the goal</li>
+</ul>
+<p>these are <strong>hard-coded</strong> into Agda 😞</p>
+<h2 id="tactic-languages">Tactic languages</h2>
+<p>Tactic languages such as Ltac allow the user to define their own tactics:</p>
+<pre class="coq"><code>Theorem plus_1_neq_0 : ∀ n : nat,
+  beq_nat (n + 1) 0 = false.
+Proof.
+  intros n. destruct n as [| n&#39;].
+  - reflexivity.
+  - reflexivity. Qed.</code></pre>
+<p>it’s another language to learn 😞</p>
+<p>we cannot see the result at edit-time 😞</p>
+<h2 id="reflection">Reflection</h2>
+<p><strong>Elaborator reflection</strong> (Idris, Agda, Lean) exposes typechecker to the reflection API</p>
+<pre class="Agda"><a id="myTerm"></a><a id="1413" href="slides.html#1413" class="Function">myTerm</a> <a id="1420" class="Symbol">:</a> <a id="1422" href="Agda.Builtin.Reflection.html#4620" class="Datatype">Term</a>
+<a id="1427" href="slides.html#1413" class="Function">myTerm</a> <a id="1434" class="Symbol">=</a> <a id="1436" href="Agda.Builtin.Reflection.html#4720" class="InductiveConstructor">con</a> <a id="1440" class="Symbol">(</a><a id="1441" class="Keyword">quote</a> <a id="1447" href="Agda.Builtin.Nat.html#196" class="InductiveConstructor">suc</a><a id="1450" class="Symbol">)</a> <a id="1452" href="Prelude.List.html#474" class="InductiveConstructor Operator">[</a> <a id="1454" href="Builtin.Reflection.html#2708" class="InductiveConstructor">vArg</a> <a id="1459" class="Symbol">(</a><a id="1460" href="Agda.Builtin.Reflection.html#4664" class="InductiveConstructor">var</a> <a id="1464" class="Number">0</a> <a id="1466" href="Agda.Builtin.List.html#158" class="InductiveConstructor">[]</a><a id="1468" class="Symbol">)</a> <a id="1470" href="Prelude.List.html#474" class="InductiveConstructor Operator">]</a>
+
+<a id="1473" class="Keyword">macro</a>
+  <a id="myMacro"></a><a id="1481" href="slides.html#1481" class="Function">myMacro</a> <a id="1489" class="Symbol">:</a> <a id="1491" href="Agda.Builtin.Reflection.html#4620" class="Datatype">Term</a> <a id="1496" class="Symbol">→</a> <a id="1498" href="Agda.Builtin.Reflection.html#7225" class="Function">TC</a> <a id="1501" href="Agda.Builtin.Unit.html#137" class="Record">⊤</a>
+  <a id="1505" href="slides.html#1481" class="Function">myMacro</a> <a id="1513" href="slides.html#1513" class="Bound">hole</a> <a id="1518" class="Symbol">=</a> <a id="1520" href="Agda.Builtin.Reflection.html#7389" class="Function">TC.unify</a> <a id="1529" href="slides.html#1513" class="Bound">hole</a> <a id="1534" href="slides.html#1413" class="Function">myTerm</a>
+
+<a id="test"></a><a id="1542" href="slides.html#1542" class="Function">test</a> <a id="1547" class="Symbol">:</a> <a id="1549" href="Agda.Builtin.Nat.html#165" class="Datatype">Nat</a> <a id="1553" class="Symbol">→</a> <a id="1555" href="Agda.Builtin.Nat.html#165" class="Datatype">Nat</a>
+<a id="1559" href="slides.html#1542" class="Function">test</a> <a id="1564" href="slides.html#1564" class="Bound">x</a> <a id="1566" class="Symbol">=</a> <a id="1568" href="slides.html#1481" class="Macro">myMacro</a> <a id="1576" class="Comment">-- == suc x</a>
+</pre>
+<p>no support for subgoals or backtracking 😞</p>
+<h2 id="edit-time-tactics-in-idris">Edit-time tactics in Idris</h2>
+<p>Joomy Korkut 2018, <em>Edit-Time Tactics in Idris</em> (master thesis at Wesleyan)</p>
+<ul>
+<li>Tactics are written using elaborator reflection: it’s just Idris code</li>
+<li>Tactics can be run <strong>edit-time</strong>: resulting term is pasted into the code</li>
+</ul>
+<h2 id="presenting-ataca">Presenting: <code>ataca</code></h2>
+<p>An implementation in three parts:</p>
+<ul>
+<li>Two small additions to Agda
+<ul>
+<li>A new command (<code>C-c C-m</code>) for running a macro at <strong>edit-time</strong></li>
+<li>A new backtracking primitive <code>runSpeculative</code></li>
+</ul></li>
+<li>A monad <code>Tac</code> with support for <strong>goal management</strong> and <strong>backtracking</strong></li>
+<li>A (small but growing) <strong>library</strong> of basic tactics</li>
+</ul>
+</section>
+<section id="demo-time" class="slide level1">
+<h1>Demo time!</h1>
+<p>Follow the demo on <a href="https://github.com/jespercockx/ataca/blob/master/src/Ataca/Demo.agda" class="uri">https://github.com/jespercockx/ataca/blob/master/src/Ataca/Demo.agda</a></p>
+</section>
+<section id="under-the-hood" class="slide level1">
+<h1>Under the hood</h1>
+<h2 id="the-tac-monad">The <code>Tac</code> monad</h2>
+<p>The core of <code>ataca</code> is the <code>Tac</code> monad:</p>
+<ul>
+<li><code>tac : Tac A</code> is a tactic that either <strong>fails</strong> or <strong>solves</strong> the goal, creating a bunch of subgoals with some <code>A</code> for each subgoal</li>
+<li><code>liftTC : TC A → Tac A</code> runs a primitive <code>TC</code> action as a tactic</li>
+<li><code>m &gt;&gt;= f</code> first runs <code>m</code> and then runs <code>f</code> on <strong>all subgoals</strong> created by <code>m</code></li>
+</ul>
+<h2 id="backtracking-primitives">Backtracking primitives</h2>
+<p><strong><code>Tac</code></strong> implements <code>Alternative</code>:</p>
+<ul>
+<li><code>empty</code> aborts the tactic, backtracking to last choice point</li>
+<li><code>m₁ &lt;|&gt; m₂</code> first tries <code>m₁</code>, but backtracks to <code>m₂</code> on a failure</li>
+</ul>
+<h2 id="example-exact-tactic">Example: <code>exact</code> tactic</h2>
+<pre class="Agda"><a id="exact"></a><a id="2997" href="slides.html#2997" class="Function">exact</a> <a id="3003" class="Symbol">:</a> <a id="3005" href="Agda.Builtin.Reflection.html#4620" class="Datatype">Term</a> <a id="3010" class="Symbol">→</a> <a id="3012" href="Ataca.Core.html#755" class="Function">Tac</a> <a id="3016" href="Ataca.Utils.html#142" class="Generalizable">A</a>
+<a id="3018" href="slides.html#2997" class="Function">exact</a> <a id="3024" href="slides.html#3024" class="Bound">solution</a> <a id="3033" class="Symbol">=</a> <a id="3035" class="Keyword">do</a>
+  <a id="3040" href="slides.html#3040" class="Bound">hole</a> <a id="3045" href="Prelude.Monad.Indexed.html#1108" class="Field Operator">←</a> <a id="3047" href="Ataca.Core.html#1298" class="Function">getHole</a>
+  <a id="3057" href="Ataca.Tactics.BasicTactics.html#195" class="Function">unify</a> <a id="3063" href="slides.html#3040" class="Bound">hole</a> <a id="3068" href="slides.html#3024" class="Bound">solution</a>
+  <a id="3079" href="Ataca.Tactics.BasicTactics.html#2906" class="Function">qed</a>
+</pre>
+<h2 id="example-assumption-tactic">Example: <code>assumption</code> tactic</h2>
+<pre class="Agda"><a id="tryVar"></a><a id="3128" href="slides.html#3128" class="Function">tryVar</a> <a id="3135" class="Symbol">:</a> <a id="3137" href="Agda.Builtin.Nat.html#165" class="Datatype">Nat</a> <a id="3141" class="Symbol">→</a> <a id="3143" href="Ataca.Core.html#755" class="Function">Tac</a> <a id="3147" href="Ataca.Utils.html#142" class="Generalizable">A</a>
+<a id="3149" href="slides.html#3128" class="Function">tryVar</a> <a id="3156" href="slides.html#3156" class="Bound">i</a> <a id="3158" class="Symbol">=</a> <a id="3160" href="slides.html#2997" class="Function">exact</a> <a id="3166" class="Symbol">(</a><a id="3167" href="Agda.Builtin.Reflection.html#4664" class="InductiveConstructor">var</a> <a id="3171" href="slides.html#3156" class="Bound">i</a> <a id="3173" href="Agda.Builtin.List.html#158" class="InductiveConstructor">[]</a><a id="3175" class="Symbol">)</a>
+
+<a id="assumption"></a><a id="3178" href="slides.html#3178" class="Function">assumption</a> <a id="3189" class="Symbol">:</a> <a id="3191" href="Ataca.Core.html#755" class="Function">Tac</a> <a id="3195" href="Ataca.Utils.html#142" class="Generalizable">A</a>
+<a id="3197" href="slides.html#3178" class="Function">assumption</a> <a id="3208" class="Symbol">=</a> <a id="3210" class="Keyword">do</a>
+  <a id="3215" href="slides.html#3215" class="Bound">ctx</a> <a id="3219" href="Prelude.Monad.Indexed.html#1108" class="Field Operator">←</a> <a id="3221" href="Ataca.Tactics.BasicTactics.html#1014" class="Function">getContext</a>
+  <a id="3234" class="Keyword">let</a> <a id="3238" href="slides.html#3238" class="Bound">xs</a> <a id="3241" class="Symbol">=</a> <a id="3243" href="Prelude.List.html#4402" class="Function Operator">from</a> <a id="3248" class="Number">0</a> <a id="3250" href="Prelude.List.html#4402" class="Function Operator">for</a> <a id="3254" class="Symbol">(</a><a id="3255" href="Prelude.List.html#777" class="Function">length</a> <a id="3262" href="slides.html#3215" class="Bound">ctx</a><a id="3265" class="Symbol">)</a>
+  <a id="3269" href="Prelude.Alternative.html#1870" class="Function">choice</a> <a id="3276" href="Prelude.Function.html#760" class="Function Operator">$</a> <a id="3278" href="Prelude.List.html#555" class="Function">map</a> <a id="3282" href="slides.html#3128" class="Function">tryVar</a> <a id="3289" href="slides.html#3238" class="Bound">xs</a>
+</pre>
+<h2 id="example-intro-tactic">Example: <code>intro</code> tactic</h2>
+<pre class="Agda"><a id="intro"></a><a id="3333" href="slides.html#3333" class="Function">intro</a> <a id="3339" class="Symbol">:</a> <a id="3341" href="Ataca.Core.html#755" class="Function">Tac</a> <a id="3345" href="Agda.Builtin.Unit.html#137" class="Record">⊤</a>
+<a id="3347" href="slides.html#3333" class="Function">intro</a> <a id="3353" class="Symbol">=</a> <a id="3355" class="Keyword">do</a>
+  <a id="3360" href="slides.html#3360" class="Bound">hole</a> <a id="3365" href="Agda.Builtin.Sigma.html#209" class="InductiveConstructor Operator">,</a> <a id="3367" href="slides.html#3367" class="Bound">type</a> <a id="3372" href="Prelude.Monad.Indexed.html#1108" class="Field Operator">←</a> <a id="3374" href="Ataca.Tactics.BasicTactics.html#1885" class="Function">getHoleWithType</a>
+  <a id="3392" href="Agda.Builtin.Reflection.html#4952" class="InductiveConstructor">pi</a> <a id="3395" href="slides.html#3395" class="Bound">a</a> <a id="3397" href="slides.html#3397" class="Bound">b</a> <a id="3399" href="Prelude.Monad.Indexed.html#1108" class="Field Operator">←</a> <a id="3401" href="Ataca.Tactics.BasicTactics.html#815" class="Function">reduce</a> <a id="3408" href="slides.html#3367" class="Bound">type</a>
+    <a id="3417" class="Keyword">where</a> <a id="3423" href="slides.html#3423" class="CatchallClause Bound">t</a><a id="3424" class="CatchallClause"> </a><a id="3425" class="CatchallClause Symbol">→</a><a id="3426" class="CatchallClause"> </a><a id="3427" href="Prelude.Alternative.html#413" class="CatchallClause Field">empty</a>
+  <a id="3435" href="slides.html#3435" class="Bound">body</a> <a id="3440" href="Prelude.Monad.Indexed.html#1108" class="Field Operator">←</a> <a id="3442" href="Ataca.Tactics.BasicTactics.html#539" class="Function">newMetaCtx</a> <a id="3453" class="Symbol">(</a><a id="3454" href="slides.html#3395" class="Bound">a</a> <a id="3456" href="Agda.Builtin.List.html#173" class="InductiveConstructor Operator">∷</a> <a id="3458" href="Agda.Builtin.List.html#158" class="InductiveConstructor">[]</a><a id="3460" class="Symbol">)</a> <a id="3462" href="Prelude.Function.html#760" class="Function Operator">$</a> <a id="3464" href="Builtin.Reflection.html#3415" class="Function">unAbs</a> <a id="3470" href="slides.html#3397" class="Bound">b</a>
+  <a id="3474" class="Keyword">let</a> <a id="3478" href="slides.html#3478" class="Bound">v</a> <a id="3480" class="Symbol">=</a> <a id="3482" href="Builtin.Reflection.html#2965" class="Function">getVisibility</a> <a id="3496" href="slides.html#3395" class="Bound">a</a>
+  <a id="3500" href="Ataca.Tactics.BasicTactics.html#195" class="Function">unify</a> <a id="3506" href="slides.html#3360" class="Bound">hole</a> <a id="3511" class="Symbol">(</a><a id="3512" href="Agda.Builtin.Reflection.html#4834" class="InductiveConstructor">lam</a> <a id="3516" href="slides.html#3478" class="Bound">v</a> <a id="3518" class="Symbol">(</a><a id="3519" href="slides.html#3435" class="Bound">body</a> <a id="3524" href="Prelude.Functor.html#273" class="Function Operator">&lt;$</a> <a id="3527" href="slides.html#3397" class="Bound">b</a><a id="3528" class="Symbol">))</a>
+  <a id="3533" href="Ataca.Core.html#1376" class="Function">addCtx</a> <a id="3540" href="slides.html#3395" class="Bound">a</a> <a id="3542" href="Prelude.Monad.Indexed.html#1240" class="Function Operator">&gt;&gt;</a> <a id="3545" href="Ataca.Core.html#1321" class="Function">setHole</a> <a id="3553" href="slides.html#3435" class="Bound">body</a>
+</pre>
+<h2 id="example-mini-auto-tactic">Example: <code>mini-auto</code> tactic</h2>
+<!--
+<pre class="Agda"><a id="3604" class="Keyword">open</a> <a id="3609" class="Keyword">import</a> <a id="3616" href="Ataca.Tactics.Intro.html" class="Module">Ataca.Tactics.Intro</a> <a id="3636" class="Keyword">using</a> <a id="3642" class="Symbol">()</a> <a id="3645" class="Keyword">renaming</a> <a id="3654" class="Symbol">(</a><a id="3655" href="Ataca.Tactics.Intro.html#799" class="Function">introAbsurd&#39;</a> <a id="3668" class="Symbol">to</a> <a id="3671" href="Ataca.Tactics.Intro.html#799" class="Function">introAbsurd</a><a id="3682" class="Symbol">)</a>
+<a id="3684" class="Keyword">open</a> <a id="3689" class="Keyword">import</a> <a id="3696" href="Ataca.Tactics.Constructor.html" class="Module">Ataca.Tactics.Constructor</a> <a id="3722" class="Keyword">using</a> <a id="3728" class="Symbol">()</a> <a id="3731" class="Keyword">renaming</a> <a id="3740" class="Symbol">(</a><a id="3741" href="Ataca.Tactics.Constructor.html#1661" class="Function">introConstructor&#39;</a> <a id="3759" class="Symbol">to</a> <a id="3762" href="Ataca.Tactics.Constructor.html#1661" class="Function">introConstructor</a><a id="3778" class="Symbol">)</a>
+</pre>-->
+<pre class="Agda"><a id="mini-auto"></a><a id="3796" href="slides.html#3796" class="Function">mini-auto</a> <a id="3806" class="Symbol">:</a> <a id="3808" href="Ataca.Core.html#755" class="Function">Tac</a> <a id="3812" href="Agda.Builtin.Unit.html#137" class="Record">⊤</a>
+<a id="3814" href="slides.html#3796" class="Function">mini-auto</a> <a id="3824" class="Symbol">=</a> <a id="3826" href="Ataca.Tactics.BasicTactics.html#2302" class="Function">repeat</a> <a id="3833" class="Number">10</a> <a id="3836" href="Prelude.Function.html#760" class="Function Operator">$</a>
+  <a id="3840" href="slides.html#3178" class="Function">assumption</a>       <a id="3857" href="Prelude.Alternative.html#551" class="Field Operator">&lt;|&gt;</a>
+  <a id="3863" href="slides.html#3333" class="Function">intro</a>            <a id="3880" href="Prelude.Alternative.html#551" class="Field Operator">&lt;|&gt;</a>
+  <a id="3886" href="Ataca.Tactics.Intro.html#799" class="Function">introAbsurd</a>      <a id="3903" href="Prelude.Alternative.html#551" class="Field Operator">&lt;|&gt;</a>
+  <a id="3909" href="Ataca.Tactics.Constructor.html#1661" class="Function">introConstructor</a>
+</pre>
+</section>
+<section id="conclusions" class="slide level1">
+<h1>Conclusions</h1>
+<h2 id="future-work">Future work</h2>
+<ul>
+<li>Improve the efficiency
+<ul>
+<li><em>Agda side</em>: only reflect parts of the term we actually need!</li>
+<li><em>Ataca side</em>: new primitives for controlling backtracking</li>
+</ul></li>
+<li>Expand the tactics library</li>
+<li>Add <strong>well-scoped</strong> and <strong>well-typed</strong> syntax representations</li>
+</ul>
+<h2 id="questions">Questions?</h2>
+<p>What else is missing? Let me know!</p>
+<p>Follow my progress on <a href="https://github.com/jespercockx/ataca" class="uri">https://github.com/jespercockx/ataca</a></p>
+<p><em>Go forth and automate thy Agda code</em></p>
+</section>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/3.7.0//lib/js/head.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/3.7.0//js/reveal.js"></script>
+
+  <script>
+
+      // Full list of configuration options available at:
+      // https://github.com/hakimel/reveal.js#configuration
+      Reveal.initialize({
+        // Display controls in the bottom right corner
+        controls: false,
+        // Push each slide change to the browser history
+        history: true,
+        // Vertical centering of slides
+        center: false,
+        // Transition style
+        transition: 'linear', // none/fade/slide/convex/concave/zoom
+        math: {
+          mathjax: 'https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.0/MathJax.js',
+          config: 'TeX-AMS_HTML-full',
+          tex2jax: {
+            inlineMath: [['\\(','\\)']],
+            displayMath: [['\\[','\\]']],
+            balanceBraces: true,
+            processEscapes: false,
+            processRefs: true,
+            processEnvironments: true,
+            preview: 'TeX',
+            skipTags: ['script','noscript','style','textarea','pre','code'],
+            ignoreClass: 'tex2jax_ignore',
+            processClass: 'tex2jax_process'
+          },
+        },
+
+        // Optional reveal.js plugins
+        dependencies: [
+          { src: 'https://cdnjs.cloudflare.com/ajax/libs/reveal.js/3.7.0//lib/js/classList.js', condition: function() { return !document.body.classList; } },
+          { src: 'https://cdnjs.cloudflare.com/ajax/libs/reveal.js/3.7.0//plugin/zoom-js/zoom.js', async: true },
+          { src: 'https://cdnjs.cloudflare.com/ajax/libs/reveal.js/3.7.0//plugin/math/math.js', async: true },
+          { src: 'https://cdnjs.cloudflare.com/ajax/libs/reveal.js/3.7.0//plugin/notes/notes.js', async: true }
+        ]
+      });
+    </script>
+    </body>
+</html>

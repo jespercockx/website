@@ -1,0 +1,4102 @@
+1 patch for repository http://code.haskell.org/Agda:
+
+Wed Mar  5 14:12:19 CET 2014  jesper.cockx@cs.kuleuven.be
+  * Added the --new-without-K flag
+  This patch adds the --new-without-K flag to Agda. When --new-without-K is enabled, the 
+  unification of indices for pattern matching is restricted in two ways:
+  1. Reflexive equations of the form x == x are no longer solved, instead Agda gives an 
+     error when such an equation is encountered.
+  2. When unifying two same-headed constructor forms 'c us' and 'c vs' of type 'D pars ixs', the 
+     datatype indices ixs (but not the parameters) have to be *self-unifiable*, i.e. unification
+     of ixs with itself should succeed positively. This is a nontrivial requirement because of 1.
+
+
+New patches:
+
+[Added the --new-without-K flag
+jesper.cockx@cs.kuleuven.be**20140305131219
+ Ignore-this: 4c3a0085feae4713a1e570ac2fd420b1
+ This patch adds the --new-without-K flag to Agda. When --new-without-K is enabled, the 
+ unification of indices for pattern matching is restricted in two ways:
+ 1. Reflexive equations of the form x == x are no longer solved, instead Agda gives an 
+    error when such an equation is encountered.
+ 2. When unifying two same-headed constructor forms 'c us' and 'c vs' of type 'D pars ixs', the 
+    datatype indices ixs (but not the parameters) have to be *self-unifiable*, i.e. unification
+    of ixs with itself should succeed positively. This is a nontrivial requirement because of 1.
+] hunk ./src/full/Agda/Interaction/Options.hs 115
+   , optIrrelevantProjections     :: Bool
+   , optExperimentalIrrelevance   :: Bool  -- ^ irrelevant levels, irrelevant data matching
+   , optWithoutK                  :: Bool
++  , optNewWithoutK               :: Bool
+   , optCopatterns                :: Bool  -- ^ Allow definitions by copattern matching?
+   , optPatternMatching           :: Bool  -- ^ Is pattern matching allowed in the current file?
+   }
+hunk ./src/full/Agda/Interaction/Options.hs 187
+   , optGuardingTypeConstructors  = False
+   , optUniversePolymorphism      = True
+   , optWithoutK                  = False
++  , optNewWithoutK               = False
+   , optCopatterns                = False
+   , optPatternMatching           = True
+   }
+hunk ./src/full/Agda/Interaction/Options.hs 299
+ noUniversePolymorphismFlag   o = return $ o { optUniversePolymorphism      = False }
+ noForcingFlag                o = return $ o { optForcing                   = False }
+ withoutKFlag                 o = return $ o { optWithoutK                  = True  }
++newWithoutKFlag              o = return $ o { optNewWithoutK               = True  }
+ copatternsFlag               o = return $ o { optCopatterns                = True  }
+ noPatternMatchingFlag        o = return $ o { optPatternMatching           = False }
+ 
+hunk ./src/full/Agda/Interaction/Options.hs 433
+                     "enable potentially unsound irrelevance features (irrelevant levels, irrelevant data matching)"
+     , Option []     ["without-K"] (NoArg withoutKFlag)
+                     "disable the K rule (maybe)"
++    , Option []     ["new-without-K"] (NoArg newWithoutKFlag)
++                    "disable the K rule (in theory)"
+     , Option []     ["copatterns"] (NoArg copatternsFlag)
+                     "enable definitions by copattern matching"
+     , Option []     ["no-pattern-matching"] (NoArg noPatternMatchingFlag)
+hunk ./src/full/Agda/TypeChecking/Errors.hs 238
+     UnsolvedMetas{}                          -> "UnsolvedMetas"
+     UnusedVariableInPatternSynonym           -> "UnusedVariableInPatternSynonym"
+     WithClausePatternMismatch{}              -> "WithClausePatternMismatch"
++    WithoutKError{}                          -> "WithoutKError"
+     WrongHidingInApplication{}               -> "WrongHidingInApplication"
+     WrongHidingInLHS{}                       -> "WrongHidingInLHS"
+     WrongHidingInLambda{}                    -> "WrongHidingInLambda"
+hunk ./src/full/Agda/TypeChecking/Errors.hs 736
+ 
+             SplitError e -> prettyTCM e
+ 
++            WithoutKError a u v -> fsep $
++              pwords "Cannot eliminate reflexive equation" ++ [prettyTCM u] ++ pwords "=" ++ [prettyTCM v] ++ pwords "of type" ++ [prettyTCM a] ++ pwords "because K has been disabled."
++
+ 	    NotStrictlyPositive d ocs -> fsep $
+ 		pwords "The datatype" ++ [prettyTCM d] ++ pwords "is not strictly positive, because"
+ 		++ prettyOcc "it" ocs
+hunk ./src/full/Agda/TypeChecking/Monad/Base.hs 1381
+         | CoverageCantSplitOn QName Telescope Args Args
+         | CoverageCantSplitIrrelevantType Type
+         | CoverageCantSplitType Type
++        | WithoutKError Type Term Term
+         | SplitError SplitError
+     -- Positivity errors
+ 	| NotStrictlyPositive QName [Occ]
+hunk ./src/full/Agda/TypeChecking/Rules/LHS/Unify.hs 34
+ import Agda.TypeChecking.Monad.Builtin (constructorForm)
+ import Agda.TypeChecking.Conversion -- equalTerm
+ import Agda.TypeChecking.Constraints
++import Agda.TypeChecking.DropArgs
+ import Agda.TypeChecking.Level (reallyUnLevelView)
+ import Agda.TypeChecking.Reduce
+ import Agda.TypeChecking.Pretty
+hunk ./src/full/Agda/TypeChecking/Rules/LHS/Unify.hs 45
+ import Agda.TypeChecking.Records
+ import Agda.TypeChecking.MetaVars (assignV, newArgsMetaCtx)
+ import Agda.TypeChecking.EtaContract
++import Agda.Interaction.Options (optInjectiveTypeConstructors, optNewWithoutK)
++
+ import Agda.TypeChecking.Rules.LHS.Problem
+ -- import Agda.TypeChecking.SyntacticEquality
+ 
+hunk ./src/full/Agda/TypeChecking/Rules/LHS/Unify.hs 52
+ import Agda.Utils.Maybe
+ import Agda.Utils.Size
++import Agda.Utils.Monad
+ 
+ #include "../../../undefined.h"
+ import Agda.Utils.Impossible
+hunk ./src/full/Agda/TypeChecking/Rules/LHS/Unify.hs 122
+   = ConstructorMismatch Type Term Term
+   | StronglyRigidOccurrence Type Term Term
+   | UnclearOccurrence Type Term Term
++  | WithoutKException Type Term Term
+   | GenericUnifyException String
+ 
+ instance Error UnifyException where
+hunk ./src/full/Agda/TypeChecking/Rules/LHS/Unify.hs 184
+ checkEqualityHH (Hom a) u v = do
+     ok <- liftTCM $ noConstraints (True <$ equalTerm a u v)  -- no constraints left
+             `catchError` \ err -> return False
+-    unless ok $ addEquality a u v
++    -- Jesper, 2013-11-21: Refuse to solve reflexive equations when --new-without-K is enabled
++    if ok
++      then (whenM (liftTCM $ optNewWithoutK <$> pragmaOptions)
++           (throwException $ WithoutKException a u v))
++      else (addEquality a u v)
+ checkEqualityHH aHH@(Het a1 a2) u v = -- reportPostponing -- enter "dirty" mode
+     addEqualityHH aHH u v -- postpone, enter "dirty" mode
+ 
+hunk ./src/full/Agda/TypeChecking/Rules/LHS/Unify.hs 302
+   ureduce Nothing = return Nothing
+   ureduce (Just t) = Just <$> ureduce t
+ 
++instance (UReduce a, UReduce b) => UReduce (a, b) where
++  ureduce (a, b) = (,) <$> ureduce a <*> ureduce b
++
++instance (UReduce a, UReduce b, UReduce c) => UReduce (a, b, c) where
++  ureduce (a, b, c) = (\x y z -> (x, y, z)) <$> ureduce a <*> ureduce b <*> ureduce c
++
++instance (UReduce a) => UReduce (I.Arg a) where
++  ureduce (Arg c e) = Arg c <$> ureduce e
++
++instance (UReduce a) => UReduce [ a ] where
++  ureduce = sequence . (map ureduce)
++
++
+ -- | Take a substitution σ and ensure that no variables from the domain appear
+ --   in the targets. The context of the targets is not changed.
+ --   TODO: can this be expressed using makeSubstitution and applySubst?
+hunk ./src/full/Agda/TypeChecking/Rules/LHS/Unify.hs 369
+ --type FunViewHH = FunV TypeHH
+ type TelHH     = Tele (I.Dom TypeHH)
+ type TelViewHH = TelV TypeHH
++type ArgsHH    = HomHet Args
+ 
+ absAppHH :: SubstHH t tHH => Abs t -> TermHH -> tHH
+ absAppHH (Abs   _ t) u = substHH u t
+hunk ./src/full/Agda/TypeChecking/Rules/LHS/Unify.hs 477
+       -- Andreas 2011-04-14:
+       Left (StronglyRigidOccurrence a u v)  -> return $ NoUnify a u v
+       Left (UnclearOccurrence a u v)        -> typeError $ UnequalTerms CmpEq u v a
++      Left (WithoutKException       a u v)  -> typeError $ WithoutKError a u v
+       Left (GenericUnifyException     err)  -> typeError $ GenericError err
+       Right _                               -> do
+         checkEqualities $ applySubst (makeSubstitution s) eqs
+hunk ./src/full/Agda/TypeChecking/Rules/LHS/Unify.hs 483
+         let n = maximum $ (-1) : flex'
+         return $ Unifies $ flattenSubstitution [ Map.lookup i s | i <- [0..n] ]
+-  `catchError` \err -> return $ DontKnow err
++  `catchError` \err -> case err of
++     TypeError _ (Closure {clValue = WithoutKError{}}) -> throwError err
++     _                                                 -> return $ DontKnow err
+   where
+     flex'      = map flexVar flex
+     flexible i = i `elem` flex'
+hunk ./src/full/Agda/TypeChecking/Rules/LHS/Unify.hs 771
+ 	(_, Var j []) | homogeneous && flexible j -> j |->? (u, a)
+ 	(Con c us, Con c' vs)
+           | c == c' -> do
+-              r <- ureduce =<< liftTCM (dataOrRecordTypeHH c aHH)
++              r <- liftTCM (dataOrRecordTypeHH' c aHH)
+               case r of
+hunk ./src/full/Agda/TypeChecking/Rules/LHS/Unify.hs 773
+-                Just a'HH -> unifyConstructorArgs a'HH us vs
+-                Nothing   -> checkEqualityHH aHH u v
++                Just (d, bHH) -> do
++                  bHH <- ureduce bHH
++                  -- Jesper, 2014-05-03: When --new-without-K is enabled, we reconstruct
++                  -- datatype indices and unify them as well
++                  newWithoutKEnabled <- liftTCM $ optNewWithoutK <$> pragmaOptions
++                  when newWithoutKEnabled (do
++                      def   <- liftTCM $ getConstInfo d
++                      let parsHH  = fmap (\(b, pars, ixs) -> pars) bHH
++                          ixsHH   = fmap (\(b, pars, ixs) -> ixs) bHH
++                          dtypeHH = (defType def) `applyHH` parsHH
++
++                      unifyConstructorArgs dtypeHH (leftHH ixsHH) (rightHH ixsHH))
++                  let a'HH = fmap (\(b, pars, _) -> b `apply` pars) bHH
++                  unifyConstructorArgs a'HH us vs
++                Nothing -> checkEqualityHH aHH u v
+           | otherwise -> constructorMismatchHH aHH u v
+         -- Definitions are ok as long as they can't reduce (i.e. datatypes/axioms)
+ 	(Def d us, Def d' vs)
+hunk ./src/full/Agda/TypeChecking/Rules/LHS/Unify.hs 920
+   :: ConHead -- ^ Constructor name.
+   -> Type  -- ^ Type of constructor application (must end in data/record).
+   -> TCM (Maybe Type) -- ^ Type of constructor, applied to pars.
+-dataOrRecordType c a = fmap (\ (d, b, args) -> b `apply` args) <$> dataOrRecordType' c a
++dataOrRecordType c a = fmap (\ (d, b, pars, _) -> b `apply` pars) <$> dataOrRecordType' c a
+ 
+ dataOrRecordType' ::
+      ConHead -- ^ Constructor name.
+hunk ./src/full/Agda/TypeChecking/Rules/LHS/Unify.hs 925
+   -> Type  -- ^ Type of constructor application (must end in data/record).
+-  -> TCM (Maybe (QName, Type, Args))
++  -> TCM (Maybe (QName, Type, Args, Args))
+            -- ^ Name of data/record type,
+hunk ./src/full/Agda/TypeChecking/Rules/LHS/Unify.hs 927
+-           --   type of constructor to be applied, and
+-           --   data/record parameters
++           --   type of constructor to be applied,
++           --   data/record parameters, and
++           --   data indices
+ dataOrRecordType' c a = do
+   -- The telescope ends with a datatype or a record.
+   (d, args) <- do
+hunk ./src/full/Agda/TypeChecking/Rules/LHS/Unify.hs 938
+         args = fromMaybe __IMPOSSIBLE__ $ allApplyElims es
+     return (d, args)
+   def <- theDef <$> getConstInfo d
+-  r <- case def of
+-    Datatype{dataPars = n} -> Just . ((,) n) . defType <$> getConInfo c
+-    Record  {recPars  = n} -> Just . ((,) n) <$> getRecordConstructorType d
+-    _		           -> return Nothing
+-  return $ fmap (\ (n, a') -> (d, a', genericTake n args)) r
++  case def of
++    Datatype{dataPars = n} -> do
++      a' <- defType <$> getConInfo c
++      let (pars, ixs) = genericSplitAt n args
++      return $ Just (d, a', pars, ixs)
++    Record{} -> do
++      a' <- getRecordConstructorType d
++      return $ Just (d, a', args, [])
++    _ -> return Nothing
+ 
+ -- | Heterogeneous situation.
+ --   @a1@ and @a2@ need to end in same datatype/record.
+hunk ./src/full/Agda/TypeChecking/Rules/LHS/Unify.hs 959
+   r1 <- dataOrRecordType' c a1
+   r2 <- dataOrRecordType' c a2  -- b2 may have different parameters than b1!
+   return $ case (r1, r2) of
+-    (Just (d1, b1, pars1), Just (d2, b2, pars2)) | d1 == d2 -> Just $
++    (Just (d1, b1, pars1, _), Just (d2, b2, pars2, _)) | d1 == d2 -> Just $
+         -- Andreas, 2011-09-15 if no parameters, we can stay homogeneous
+         if null pars1 && null pars2 then Hom b1
+          -- if parameters, go heterogeneous
+hunk ./src/full/Agda/TypeChecking/Rules/LHS/Unify.hs 967
+          else Het (b1 `apply` pars1) (b2 `apply` pars2)
+     _ -> Nothing
+ 
++dataOrRecordTypeHH' ::
++     ConHead
++  -> TypeHH
++  -> TCM (Maybe (QName, HomHet (Type, Args, Args)))
++dataOrRecordTypeHH' c (Hom a) = do
++  r <- dataOrRecordType' c a
++  case r of
++    Just (d, a', pars, ixs) -> return $ Just (d, Hom (a', pars, ixs))
++    Nothing                 -> return $ Nothing
++dataOrRecordTypeHH' c (Het a1 a2) = do
++  r1 <- dataOrRecordType' c a1
++  r2 <- dataOrRecordType' c a2
++  return $ case (r1, r2) of
++    -- TODO: We should always have b1 == b2, check/force this in some way?
++    (Just (d1, b1, pars1, ixs1), Just (d2, b2, pars2, ixs2)) | d1 == d2 -> Just $
++        if null pars1 && null pars2 && null ixs1 && null ixs2
++          then (d1, Hom (b1, [], []))
++          else (d1, Het (b1, pars1, ixs1) (b2, pars2, ixs2))
++    _ -> Nothing
++
++
+ -- | Return record type identifier if argument is a record type.
+ isEtaRecordTypeHH :: MonadTCM tcm => TypeHH -> tcm (Maybe (QName, HomHet Args))
+ isEtaRecordTypeHH (Hom a) = fmap (\ (d, ps) -> (d, Hom ps)) <$> liftTCM (isEtaRecordType a)
+hunk ./test/fail/Interaction-and-input-file.err 46
+           --no-irrelevant-projections                 disable projection of irrelevant record fields
+           --experimental-irrelevance                  enable potentially unsound irrelevance features (irrelevant levels, irrelevant data matching)
+           --without-K                                 disable the K rule (maybe)
++          --new-without-K                             disable the K rule (in theory)
+           --copatterns                                enable definitions by copattern matching
+           --no-pattern-matching                       disable pattern matching completely
+ 
+addfile ./test/fail/Issue1025.agda
+hunk ./test/fail/Issue1025.agda 1
++{-# OPTIONS --new-without-K #-}
++
++module Issue1025 where
++
++data _≡_ {A : Set} (x : A) : A → Set where
++  refl : x ≡ x
++
++postulate mySpace : Set
++postulate myPoint : mySpace
++
++data Foo : myPoint ≡ myPoint → Set where
++  foo : Foo refl
++
++test : {e : myPoint ≡ myPoint} → (a : Foo e) → (i : a ≡ a) → i ≡ refl
++test foo refl = {!!}
+addfile ./test/fail/Issue1025.err
+hunk ./test/fail/Issue1025.err 1
++Issue1025.agda:15,10-14
++Cannot eliminate reflexive equation myPoint = myPoint of type
++mySpace because K has been disabled.
++when checking that the pattern refl has type foo ≡ foo
+addfile ./test/fail/NewWithoutK.agda
+hunk ./test/fail/NewWithoutK.agda 1
++{-# OPTIONS --new-without-K #-}
+hunk ./test/fail/NewWithoutK.agda 3
++module NewWithoutK where
++
++data _≡_ {A : Set} (a : A) : A → Set where
++  refl : a ≡ a
++
++K : (A : Set) (a : A) (p : a ≡ a) → p ≡ refl
++K A a refl = refl
+addfile ./test/fail/NewWithoutK.err
+hunk ./test/fail/NewWithoutK.err 1
++NewWithoutK.agda:9,7-11
++Cannot eliminate reflexive equation a = a of type A because K has
++been disabled.
++when checking that the pattern refl has type a ≡ a
+hunk ./test/fail/TwoCompilers.err 46
+           --no-irrelevant-projections                 disable projection of irrelevant record fields
+           --experimental-irrelevance                  enable potentially unsound irrelevance features (irrelevant levels, irrelevant data matching)
+           --without-K                                 disable the K rule (maybe)
++          --new-without-K                             disable the K rule (in theory)
+           --copatterns                                enable definitions by copattern matching
+           --no-pattern-matching                       disable pattern matching completely
+ 
+addfile ./test/succeed/NewWithoutK.agda
+hunk ./test/succeed/NewWithoutK.agda 1
++{-# OPTIONS --new-without-K #-}
++
++module NewWithoutK where
++
++data ℕ : Set where
++  zero : ℕ
++  suc  : ℕ → ℕ
++
++infixl 20 _+_
++_+_ : ℕ → ℕ → ℕ
++zero + n = n
++(suc m) + n = suc (m + n)
++
++infixl 30 _*_
++_*_ : ℕ → ℕ → ℕ
++zero * n = zero
++(suc m) * n = n + (m * n)
++
++infixl 5 _⊎_
++data _⊎_ (A B : Set) : Set where
++  inj₁ : A → A ⊎ B
++  inj₂ : B → A ⊎ B
++
++infixl 10 _≡_
++data _≡_ {A : Set} (a : A) : A → Set where
++  refl : a ≡ a
++
++data _≤_ : ℕ → ℕ → Set where
++  z≤n : {n : ℕ} → zero ≤ n
++  s≤s : {m n : ℕ} → m ≤ n → suc m ≤ suc n
++
++foo : (k l m : ℕ) → k ≡ l + m → ℕ
++foo .(l + m) l m refl = zero 
++
++bar : (n : ℕ) → n ≤ n → ℕ
++bar .zero z≤n = zero
++bar .(suc m) (s≤s {m} p) = zero
++
++baz : ∀ m n → m * n ≡ zero → m ≡ zero ⊎ n ≡ zero
++baz zero     n      h = inj₁ refl
++baz (suc m) zero    h = inj₂ refl
++baz (suc x) (suc x₁) ()
+
+Context:
+
+[Test case for issue 888
+fredrik.nordvall-forsberg@strath.ac.uk**20140221144225
+ Ignore-this: 4096d88126c0d511f121a1f4daecd3ed
+] 
+[Let bound variables in "Show context" (partial fix issue 888)
+fredrik.nordvall-forsberg@strath.ac.uk**20140221141017
+ Ignore-this: 13de4af695a2224ea59d980670ddabb8
+] 
+[Comments only: some alternatives considered for fixing issue 1071.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140303093145
+ Ignore-this: 24268b2a8fe3ff160a960e3f15cc6e48
+] 
+[Fixed issue 1071.  Failing heterogeneous unification problems are now rechecked a third time if can be made homogeneous by checking type equality.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140303091940
+ Ignore-this: 6b984a3b875cda9d9078f52a3b41e54a
+] 
+[Minor refactor: reuse fall-through clause in case distinction.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140303091314
+ Ignore-this: b351ca785717fb1b0a32bcbe315dc6ec
+] 
+[A more general type for checkSyntacticEquality.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140303091142
+ Ignore-this: 5bdcb51e6efe1db06571181717c93913
+] 
+[Refactor: MonadState Unify in terms of MonadTCM Unify; and a debug message.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140303085454
+ Ignore-this: 5d94743a353dc7fc353c1e41c94ac6c8
+] 
+[[ issue 1061 ] Undid fix which made overall behavior worse.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140302212030
+ Ignore-this: 9f0988e3710f6be127300b9c7c7d6840
+] 
+[Fixed issue 1070: Projected metas may not be pruned during occurs check!
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140302211005
+ Ignore-this: 758943d1a18ae9d1643c135f6725a1d3
+] 
+[Refactor: removed some retired code.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140302205853
+ Ignore-this: 5c80cb05bef541aebae7570c463f5d1e
+] 
+[Minor: fixed context in debug printing.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140302205831
+ Ignore-this: 7caddcbf20b95688598e45cf6c4b7af9
+] 
+[Refactor: Renamed takeMaybe to takeWhileJust.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140302205758
+ Ignore-this: 89dc92c27c71ba9cd3cf7723322c024f
+] 
+[A use of lazy monadic conjunction and2M.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140302205658
+ Ignore-this: e50228a54b8951964426ad6215538aa6
+] 
+[[ .authorspellings ] Added missing anchoring and escape characters.
+Andrés Sicard-Ramírez <asr@eafit.edu.co>**20140224122224
+ Ignore-this: db3bfc397197d5114072ac8a5ff800d5
+] 
+[Fixed issue 1069: Nothing instead of IMPOSSIBLE if type of projection is meta instead of record in constraint solver.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140302195130
+ Ignore-this: 522d8bbbbd6c1d2db3ede63a9bbe33ee
+] 
+[Added author's alias.
+Andrés Sicard-Ramírez <asr@eafit.edu.co>**20140223195724
+ Ignore-this: 206c7ef80dfd93bd13a14e54117949b0
+] 
+[A use of TupleSections in Utils.Graph.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140216124605
+ Ignore-this: 82978bfac9a030264dba64ea1c4bd93a
+] 
+[Some comments, asymptotic complexities, uses of list comprehension for Utils.Graph.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140216123851
+ Ignore-this: 29e060442e481d8184010d27698cf917
+] 
+[Refactor: type class Diagonal to overload diagonal function for matrices.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140223191252
+ Ignore-this: c3bcc2fb486676cdfe89f9ea33cb17ca
+] 
+[Refactor: now CallGraph.insert does not rely on Call constructor.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140223185215
+ Ignore-this: 442e92344f7463551d18982d0e2b73b0
+] 
+[Refactor: move isDecr to Termination.Order, make diagonal return list instead of array, make matrix test work with Int indices instead of Integer.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140223184937
+ Ignore-this: 244a8beb3452bb461f2837f8505d4273
+] 
+[Refactor: renamed type variable 'meta' to 'cinfo' to avoid confusion with meta variable terminology.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140223182508
+ Ignore-this: 9f06c62584a78be0e437106caf080232
+] 
+[Factored out Termination.CallMatrix from Termination.CallGraph.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140223135205
+ Ignore-this: c525e737e822d9269885b3f6c6ad26dd
+] 
+[Fixed wrong module name in Termination.Order.runTests.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140223134814
+ Ignore-this: 4cb30ae2f6654090d5a6522969b22aee
+] 
+[Refactor: <$> instead of fmap in Utils.TestHelpers.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140223132259
+ Ignore-this: 5886ce1430631849113d74a06153bc0a
+] 
+[Refactor: Matrix Int Order instead of Matrix Integer Order.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140223131114
+ Ignore-this: 9539a27eef263576ac305ba82867fc7d
+] 
+[Refactor: extracted Termination.Order from Termination.CallGraph.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140223130039
+ Ignore-this: 334c2138a5ffd936aa4d1324cd40e245
+] 
+[Refactor: moved <.>, $>, and for from Utils.Monad to Utils.Functor.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140216185319
+ Ignore-this: 46b4ecbe5b2f673734b46b8762944174
+] 
+[[ issue 1061 ] Release notes.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140223093924
+ Ignore-this: 93caf662535b514bcb9611b21a40abc4
+] 
+[[ issue 1061 ] Reuse existing window displaying agda2-info-buffer even when it is not in the raised frame.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140223093152
+ Ignore-this: 10578ada21ef198f7deaa44cce54ce38
+ Credits to Iqbal Ansari at http://stackoverflow.com/questions/21955162/emacs-how-to-display-a-buffer-without-switching-window-and-without-raising-fram
+] 
+[[ LaTeX-backend ] Fix polytable output for single space indents (problem
+Stevan Andjelkovic <stevan.andjelkovic@strath.ac.uk>**20140218170415
+ Ignore-this: 34d36b426a2f8d1f1416d72f2255d3be
+ spotted by Andrea Vezzosi).
+] 
+[Some comments for Agsy syntax.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140221123309
+ Ignore-this: 407b697404990480edc1694b90e53f60
+] 
+[[ issue1035 ] fixed: module parameters were messed up in with display forms
+ulfn@chalmers.se**20140219132924
+ Ignore-this: cb3926216f90148b16b617cc563e2a87
+] 
+[[build] using rawSystem instead of system when compiling Agda.Primitive
+ulfn@chalmers.se**20140219071429
+ Ignore-this: e381d1468f672c6dde3d53d1df1835ed
+] 
+[[ issue 1062 ] Test case for LaTeX backend.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140218162156
+ Ignore-this: 3a2a9377d91294dbbabc708c9fe6d938
+] 
+[[ issue 1062 ] Preliminary fix: __IMPOSSIBLE__ --> empty string.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140217164436
+ Ignore-this: 8effbca54229d51eeaf72f711e321ba7
+ Stevan, please investigate if this fix is proper or just conceils
+ the failure of an internal invariant otherwhere.
+] 
+[Add CPP to the language extensions of Reduce/Monad.hs.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140217151517
+ Ignore-this: 1b354727afa2a051a247f186bed4b2c8
+] 
+[A comment documenting MetaPriority.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140217151443
+ Ignore-this: f722350f7419ad682649fa5dc0b0bf83
+] 
+[Fixed issue 1060.  C-c C-s should not solve for metas whose solution is a meta.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140217151406
+ Ignore-this: fa3644a314227efb96fe1738ba961ab2
+] 
+[Minor cleanup in Utils.Favorites.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140216123939
+ Ignore-this: a7823f584aebf578c645cdf41c912a9b
+] 
+[Fixed a wrong comment in Utils.Monad.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140216123756
+ Ignore-this: 745ce9db75b0d36eec276e10af0cca26
+] 
+[[ reflection test ] Removed unnecessary mutual block.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20140215034424
+ Ignore-this: 25b6683623efc357551c173347060a37
+] 
+[[ issue 1059 ] Make MAlonzo work with sections (anonymous modules).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140215225011
+ Ignore-this: f1fe666c74bce4b636e77f93975bfc3d
+] 
+[Fixed issue 1048.  Datatypes.getConType did not find constructor when it was not normalized.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140215161216
+ Ignore-this: 31834ae24d1b69c2f5493e00ee284212
+ Fixed by normalizing constructor in getConType.
+] 
+[[ LaTeX-backend ] Create missing directories before writing the tex output.
+Stevan Andjelkovic <stevan.andjelkovic@strath.ac.uk>**20140212165814
+ Ignore-this: a6e29cd88f6d59b0f320faef1eb19903
+] 
+[benchmark run
+ulfn@chalmers.se**20140212125550
+ Ignore-this: d2ecb6aaf60efc64675948176cd5973b
+] 
+[[lazy reduce] ReduceM is now a plain (lazy) reader monad
+ulfn@chalmers.se**20140212125315
+ Ignore-this: 413658a952d73df2cdb527a358143dbd
+   - no huge performance changes
+] 
+[minor change to debug output in with termination inlining
+ulfn@chalmers.se**20140212103931
+ Ignore-this: caa113b775b65e1aac982eee55c00ce3
+] 
+[fixed possible __IMPOSSIBLE__ in InternalToAbstract
+ulfn@chalmers.se**20140212103713
+ Ignore-this: 4423effe4757024cf3de36311a261e8f
+] 
+[[interface] show unsolved meta types simplified instead of normalised
+ulfn@chalmers.se**20140212103625
+ Ignore-this: 625531b78d7f30efb2482bd7d3f06e64
+] 
+[[lazy reduce] moved primitive function implementations to the Reduce monad
+ulfn@chalmers.se**20140212102833
+ Ignore-this: fa19c7f0814d94309e3f0ab192f4e635
+] 
+[Test case ensuring we have eta for inductive records.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140208211909
+ Ignore-this: ccd63455a5d865e0fd7c0e96a538908a
+] 
+[[Issue1039] Improved equality check for levels
+jesper.cockx@cs.kuleuven.be**20140202221927
+ Ignore-this: b90cee6806a1b7f8423bd4d7101900a1
+] 
+[[ issue1042 ] handle spaces in filenames when generating Agda.Primitive interface
+ulfn@chalmers.se**20140206112045
+ Ignore-this: e5b333932dc3bfda121ee5992c85db8a
+] 
+[[ LaTeX-backend ] Use RequirePackage instead of usepackage, remove declare unicode (they have been shipped upstream), add hack to make amsthm work.
+Stevan Andjelkovic <stevan.andjelkovic@strath.ac.uk>**20140203134643
+ Ignore-this: 1c0935f31769d0be134c4d8eea3f1e89
+] 
+[refactoring: moved reductions to its own monad (ReduceM)
+ulfn@chalmers.se**20140205202056
+ Ignore-this: 466027fefb93df7584c2178c0cf5e14
+   - ReduceM is just newtyped TCM for now, but that will change
+   - reductions: reduce, normalise, instantiate, instantiateFull, simplify
+] 
+[benchmark run
+ulfn@chalmers.se**20140205104316
+ Ignore-this: faedea59296f1392b74710be7b6bd538
+] 
+[fixed broken benchmark examples
+ulfn@chalmers.se**20140205104237
+ Ignore-this: f6167fa0feadccf0fdeebff44d322a0
+] 
+[[ issue1041 ] don't normalise telescopes when checking left hand sides
+ulfn@chalmers.se**20140205101640
+ Ignore-this: cd82139de523242fe0bd499c72386bae
+   - unless reordering fails, in which case we try normalising
+     (this was the reason for normalising in the first place [issue234])
+   - this revealed a problem in unification where non-rigid occurs failure
+     caused a type error instead of retrying with normalised indices
+] 
+[[ issue1041 ] refactored implicit argument insertion to do less reduction in the type
+ulfn@chalmers.se**20140205101621
+ Ignore-this: 6194fab94a58128ead3a550e23901e68
+] 
+[removed inverse scope lookup debug output
+ulfn@chalmers.se**20140205083650
+ Ignore-this: 65d51d6da7b4ac9dfd7dc5531377c594
+] 
+[updated test/fail with new syntax declaration error message
+ulfn@chalmers.se**20140130075602
+ Ignore-this: 47da6c15e322cee32db41f62131dc18
+] 
+[[ issue400 ] fixed: syntax declarations can use hidden arguments
+ulfn@chalmers.se**20140130072849
+ Ignore-this: 4c5aa3c80a5e4d05732c535f568747d8
+   example: syntax id {A} x = x ∈ A
+] 
+[the beast negated
+ulfn@chalmers.se**20140129203823
+ Ignore-this: 84954173d9cb0d548d080e709863e2f
+] 
+[[ issue207 ] mention C-c C-w in ambiguous name error messages
+ulfn@chalmers.se**20140129184613
+ Ignore-this: fab8657d2a512b2e1b304e4c31725359
+] 
+[[ issue207 ] documented C-c C-w in the release notes
+ulfn@chalmers.se**20140129182600
+ Ignore-this: 53951aa662a05f869d9014f7f08a962d
+] 
+[[ issue207 ] fixed: new command to explain why things are in scope
+ulfn@chalmers.se**20140129181220
+ Ignore-this: 76bc90c6494d5fc897e7d4bd68d637f3
+   - short-cut C-c C-w
+   - used in goal or at top-level
+   - example output:
+   zero is in scope as
+     * a constructor Common.Prelude.Nat.zero brought into scope by
+       - the opening of N at Issue207.agda:10,6-7
+       - the opening of Common.Prelude at Issue207.agda:8,8-22
+       - its definition at /Users/ulfn/research/Agda/test/Common/Prelude.agda:22,3-7
+     * a constructor Issue207.Fin.zero brought into scope by
+       - its definition at Issue207.agda:24,3-7
+] 
+[[ issue207 ] keep track of why things are in scope
+ulfn@chalmers.se**20140129133348
+ Ignore-this: 4b4096eba1ca0f31a00423f559548899
+   - no way to get the information to the user yet
+] 
+[[ issue1036 ] fixed: don't consider modules with unfilled holes checked
+ulfn@chalmers.se**20140129123339
+ Ignore-this: 2dd32bb75a20fdc80f0a45c7665b79d7
+   - even if they don't have any unsolved metas
+] 
+[[ issue1033 ] updated interaction test case output
+ulfn@chalmers.se**20140129123248
+ Ignore-this: 9b38a561c39d2f3302df6cd6b0920559
+] 
+[[ issue6 ] updated interaction test case output
+ulfn@chalmers.se**20140129123157
+ Ignore-this: 8265c119a44d4f2087686bd0b08035eb
+] 
+[[ issue6 ] fixed for reals (token highlighting fixed)
+ulfn@chalmers.se**20140129112241
+ Ignore-this: 60ce6aacbb2dc284556e5a7b64e6bfca
+   - highlighting for give still works like the first fix: since the string is already
+     in the buffer we can generate highlighting for it without waiting for emacs to
+     insert it into the buffer
+   - for all other goal filling commands the emacs mode calls Cmd_highlight when it's
+     filled a goal to let the Agda side know that it should generate some highlighting
+     information for whatever string emacs inserted
+] 
+[[ issue6 ] almost fixed: just missing token highlighting
+ulfn@chalmers.se**20140129110123
+ Ignore-this: 80547807b9ba53f4551f5c0b0b26599c
+   - added a goal command Cmd_highlight which takes an old interaction
+     point (that has recently been filled) and generates highlighting
+     information for the contents of that point (given to the command)
+   - this command is called by emacs after filling an interaction point
+     with a literal string (so, not for give, but all other ways of
+     filling a hole)
+] 
+[[ issue6 ] emacs-mode: added agda2-mkRange
+ulfn@chalmers.se**20140129110055
+ Ignore-this: 4d4630a5f11d271aad25a789047e7b89
+] 
+[[ issue6 ] emacs-mode: added a flag to agda2-go to disable abort-if-command-in-progress check
+ulfn@chalmers.se**20140129105835
+ Ignore-this: 1a8b3906d701e59c67953a99c8bca3a3
+   - we want to be able to issue a highlight command from the goal update function without
+     running afoul of the abort check
+] 
+[[ issue6 ] remember the scope of old interaction points
+ulfn@chalmers.se**20140129105747
+ Ignore-this: e7ba48a022cbaab5fa9d9be911346ee4
+   - needed to be able to parse their contents for highlighting purposes
+] 
+[[ issue1033 ] fixed: don't set the highlighting range if we're not actually highlighting it
+ulfn@chalmers.se**20140129093657
+ Ignore-this: e0b7b906530dff50fb55c137ee57b6f1
+] 
+[refactored not-so-nice-looking code in traceCall
+ulfn@chalmers.se**20140129093518
+ Ignore-this: c15aaec6e6c176c8640a771dbeb6a09c
+] 
+[[ issue6 ] highlighting fixed for 'give'
+ulfn@chalmers.se**20140124185540
+ Ignore-this: 5f66379eab7bd6da1286b7a905b6fdec
+   - doesn't yet work for refine or auto
+] 
+[[ issue1031 ] fixed: replaced a few Axiom's by emptyFunction
+ulfn@chalmers.se**20140124125542
+ Ignore-this: 249c7cd21dc2773a847f091c0ba6182c
+] 
+[[ issue495 ] updated latex-test output to reflect pattern synonym highlighting
+ulfn@chalmers.se**20140124070301
+ Ignore-this: 49ff473804735d1bb454b99fbf0ec514
+] 
+[[ issue495 ] updated interaction test output
+ulfn@chalmers.se**20140123214741
+ Ignore-this: 7690fd9a031c0fb5b02e9ea696c18df7
+] 
+[[ issue495 ] fixed: proper highlighting and ranges for pattern synonyms
+ulfn@chalmers.se**20140123214517
+ Ignore-this: 91c62a5c3b559db15f1301bde44e8561
+] 
+[[ issue758 ] fixed re-messing-up of error locations for pattern synonyms
+ulfn@chalmers.se**20140123200020
+ Ignore-this: 5dc024af9a58094d2e057bf0a3b18f1d
+] 
+[[ issue758 ] fixed: highlighting for pattern synonym definitions
+ulfn@chalmers.se**20140123191937
+ Ignore-this: 1c13b4fd4785d4d8bf64f99626bba6a8
+] 
+[[ issue860 ] fixed: pattern synonyms can now take implicit arguments
+ulfn@chalmers.se**20140123153139
+ Ignore-this: b4b3dac321e91dc1dc7c166bf5aa08a5
+   - one use case for this is to define pattern synonyms that ignore parts of the pattern
+     for example:
+       pattern tail {x} xs = x :: xs
+     or even
+       pattern isCons {x} {xs} = x :: xs
+] 
+[[ std-lib ] Props was renamed to Properties.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20140123132931
+ Ignore-this: 97b0d01e6d80e9c8dd13046b363bb5f2
+] 
+[[ issue860 ] representation change of pattern synonyms
+ulfn@chalmers.se**20140123102447
+ Ignore-this: 2f5eedae8dbce7bfbb2001cb7bcd3f7b
+   - preparing for fix to allow implicit args to pattern synonyms
+] 
+[[ issue941 ] fixed: pattern synonyms in parameterised modules supported
+ulfn@chalmers.se**20140123093040
+ Ignore-this: c3c9eb0cf4b833e7dce7123891ad8d8
+] 
+[[ issue1028 ] fixed: allow let f x = x in e
+ulfn@chalmers.se**20140122104153
+ Ignore-this: 3b2b6588b330ea9769b48f5b615bb30
+] 
+[[ Makefile ] Pulling the standard library from GitHub.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20140117153631
+ Ignore-this: 5fac39bb8ab7767d39045669921a85ab
+] 
+[[ issue 1028 ] Better error message for let decl without type signature.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140119221113
+ Ignore-this: 1040605b0fd0902b701c78ab15035e7a
+ Now checking lhs (interpreted as irrefutable pattern) before rhs.  
+ This avoids errors like "unbound x" when the user wrote "let f x = ... in ...".  
+ Now the error is "could not parse l.h.s.".
+] 
+[[ issue1027 ] switch to Cuckoo hash for 64-bit Windows (Basic hashtable is super slow)
+ulfn@chalmers.se**20140119083616
+ Ignore-this: 62835800994cb279d26c736e782e4ca3
+   Patch by meurglys3@gmail.com
+] 
+[New option --no-pattern-matching.  Disables any kind of splits in lhs checking.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140118001618
+ Ignore-this: 315e5a0021a51f82a71a580eb2a77e4e
+] 
+[[ issue655 ] fixed also for let declarations
+ulfn@chalmers.se**20140117084331
+ Ignore-this: fc2da6c28efae26ce7e7c15ecb456422
+] 
+[[ issue983 ] fixed: don't kill range of let declarations in record constructor type
+ulfn@chalmers.se**20140117081559
+ Ignore-this: 5235b75a911f89279f94cbcd1b4d6ba3
+] 
+[work-around for deriving bug in ghc-7.7
+ulfn@chalmers.se**20140117075526
+ Ignore-this: 1e0786179aa2060f9839c62bf6c5cd23
+] 
+[[make test] proper clean after latex-test
+ulfn@chalmers.se**20140117075229
+ Ignore-this: ecc1f784eb08f7d9f8e9a87339925e3b
+] 
+[[cabal] relaxed constraint for text
+ulfn@chalmers.se**20140117075203
+ Ignore-this: 54112c06a5895c436a4b87295df93339
+] 
+[[ issue 1020 ] Fixed problem with successful refining with empty string.  This unfixes issue 994.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140115154147
+ Ignore-this: 6a69b8e0934f72829dbae8d35e07fb69
+] 
+[Big refactor of TermCheck: introduced Reader monad and class ExtractCalls.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140111204414
+ Ignore-this: 204db90d7e89edf91eac5eb09bc17cd1
+ No change of functionality.  (Hopefully no bugs introduced.)
+ Uff, that took me 10 hours.
+ Bye, bye, code from 2007.
+] 
+[TermCheck: changed Index in call graph from Integer to Int.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140111134444
+ Ignore-this: 3b15f29d9050edd7d28eda75860c29b7
+ A machine integer is definitely sufficient, since we cannot have more
+ objects than memory addresses.  
+ Especially not mutual functions or number of function arguments, haha.
+] 
+[TermCheck: import SparseMatrix as Matrix, not Term.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140111132237
+ Ignore-this: 4f0231825a0dd140d9340ab6bdc3068c
+] 
+[Added LANGUAGE FlexibleInstances to TypeChecking.Primitive.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131115193408
+ Ignore-this: 1bac47387be4e703a7c8aa1bbcd360ce
+ ghc-6.12 needs this in addition to TypeSynonymInstances, if I recall correctly.
+] 
+[[ agda-mode ] To query emacs, start it with -nw and --no-desktop.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140111113956
+ Ignore-this: f3b55a978b18bd5628b9f305477b18e7
+] 
+[Removed some retired code from TermCheck.hs.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140111111729
+ Ignore-this: 6b05cff5435776b1346a6c133556b83c
+] 
+[[ LaTeX-backend ] Make make clean more robust.
+Stevan Andjelkovic <stevan.andjelkovic@strath.ac.uk>**20140110200130
+ Ignore-this: e98c0d55ea39bb18fe3b3ee6e4cd17b4
+] 
+[[ issue 1020 ] Fixed. `Give'n stuff is again appearing as the user wrote.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140110200102
+ Ignore-this: 9828264c84f9b8cb2636bfa8547b7bec
+ Even if it creates new interaction points!
+ Faulty behavior was introduced in fix for issue 994.
+] 
+[[ issue 994 ] Documented expected test case behavior in Issue994.agda.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140110192106
+ Ignore-this: 2983173ece6187d4372a129ebad9497d
+] 
+[[ issue 1020 ] Added interaction test case.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140110190744
+ Ignore-this: 3c43d8d3439ae36e6f2876cc17aac61e
+ Note: Issue not fixed yet.  Output not yet the expected one.
+] 
+[[ LaTeX-backend ] Sprinkle % over commands related to links to remove whitespace from output.
+Stevan Andjelkovic <stevan.andjelkovic@strath.ac.uk>**20140110132723
+ Ignore-this: b6bc4b5a23b1d31ba94c89109bffab4f
+] 
+[[ latex-tests ] make clean both before and after running the tests
+ulfn@chalmers.se**20140110155455
+ Ignore-this: 9815bbe9a2caeefeb03a21d391436366
+] 
+[[ issue 803 ] Using distribution-agnostic font names.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20140110153134
+ Ignore-this: e89e05fa1b05a5285f74621aab88bf38
+] 
+[[ latex-backend ] put back .compile files
+ulfn@chalmers.se**20140110151459
+ Ignore-this: 28cffb0001a05e82937af1005b288745
+   - turns out it was just me being stupid...
+] 
+[[ issue1019 ] xelatex fails for UnicodeDeclare.lagda, so disabling compilation
+ulfn@chalmers.se**20140110132700
+ Ignore-this: ec048ebe736cfa622dee44a166dab726
+   - is there something broken in my setup?
+] 
+[[ LaTeX-backend ] make \DeclareUnicodeCharacter work with all latex tools
+Stevan Andjelkovic <stevan.andjelkovic@strath.ac.uk>**20140110131900
+ Ignore-this: f5da12c83e51e7c865984bf379271ebc
+] 
+[[ issue803 ] pdflatex fails mysteriously (for me) on Links.lagda so disabling compilation for that test
+ulfn@chalmers.se**20140110125214
+ Ignore-this: 394ee7e7bd0164e92cea85b9b65482ba
+] 
+[[ LaTeX-backend, Issue 803 ] Add cheap and experimental support for links to identifiers within pdfs
+Stevan Andjelkovic <stevan.andjelkovic@strath.ac.uk>**20140103173059
+ Ignore-this: 6b0d35f695c0289deef480940310827e
+] 
+[added latex backend tests to "test" make target
+ulfn@chalmers.se**20140110100300
+ Ignore-this: 74619fa74d4429d0def141354efc495b
+] 
+[[ LaTeX-backend ] Improve support for xelatex and lualatex.
+Stevan Andjelkovic <stevan.andjelkovic@strath.ac.uk>**20140103134852
+ Ignore-this: 27a1ace827c2487386bcb63939662dd3
+] 
+[[ issue1008 ] fixed: added missing occurs check in agsy unification
+ulfn@chalmers.se**20140110095725
+ Ignore-this: ee60853f2c985b9f5a1da2141a0ff611
+] 
+[changed default make target to install-bin (was compile-emacs-mode)
+ulfn@chalmers.se**20140110093819
+ Ignore-this: b5f253ee99ed03720331275b92a37c4e
+] 
+[documented new make-case behaviour in release notes
+ulfn@chalmers.se**20140110093753
+ Ignore-this: 5ad88aa4d6c27fc02c65118267b52a94
+] 
+[removed verbosity from a test/succeed test case
+ulfn@chalmers.se**20140110093228
+ Ignore-this: 5ae4ce691a5a0df3f67e0b0a740438c7
+] 
+[[ issue1006 ] changed behaviour of case-split
+ulfn@chalmers.se**20140110092846
+ Ignore-this: 1df1bff1cc08e8e8eeb4454464b06cd0
+   - it now replaces dot patterns by ._ if that means we can avoid making an implicit
+     argument explicit
+   - example: case splitting on the first vector in this version of append yields
+ 
+       append : {A : Set} (n m : Nat) -> Vec A n -> Vec A m -> Vec A (n + m)
+       append .zero m [] ys = ?
+       append ._ m (x :: xs) ys = ?
+ 
+     Previously the second clause became
+ 
+       append .(suc n) m (_::_ {n} x xs) ys = ?
+] 
+[[ issue 1014 ] Call graph was not iterated to completion, leading to acceptance of non-guarded function.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140109144837
+ Ignore-this: 3c4fe31befd3f57e12c2675b56204f80
+] 
+[[ issue1012 ] fixed: don't drop implicit arguments un unquote!
+ulfn@chalmers.se**20140109140446
+ Ignore-this: cdf33a869a35e4d56a95f1ea514d2610
+] 
+[[ issue1016 ] fixed: added new constraint for postponed checkArguments call
+ulfn@chalmers.se**20140109110725
+ Ignore-this: 3443e45bbc23e3909a44de2b3c7f1d51
+   the problem was that we postponed checking P _ x after having created the meta
+   but when returning to the problem we rechecked everything from the beginning
+   thus creating a new copy of the meta
+] 
+[[ issue993 ] fixed path capitalization issue in Setup.hs
+ulfn@chalmers.se**20140109075626
+ Ignore-this: d8fe14af62b35a1634e9a814078b106
+] 
+[[ issue993 ] replaced some /s and .s by </> and <.> for improved portability
+ulfn@chalmers.se**20140108185400
+ Ignore-this: bbfc07138fb3a5dad082f6fed35ddd3b
+] 
+[[ issue993 ] fixed: added a cabal post-install hook to generate agdai for Agda.Primitive
+ulfn@chalmers.se**20140108184652
+ Ignore-this: 76f5ec3a5e0d5f64fad2c230d2209166
+] 
+[An example by Maxime Denes showing the incompatibility of iso-is-equality with K and the structural termination order.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140108171911
+ Ignore-this: 1b6708111e61a1d5e5dcbf9a032207c8
+] 
+[[ issue1006 ] fixed: implicit constructor patterns are not hidden!
+ulfn@chalmers.se**20140108101818
+ Ignore-this: 4e75634ff28d92f5d9fa817b0bea5917
+] 
+[[ issue 1013 ] test case
+ulfn@chalmers.se**20140108101726
+ Ignore-this: 771748b438a6e0c3c954f4aa802b8999
+] 
+[[ issue 1013 ] fixed: instance search applying metas to wrong arguments
+ulfn@chalmers.se**20140108093915
+ Ignore-this: 8c803ac45bfaf333a9f5a53eab3dda5d
+] 
+[increased verbosity level for inverse scope lookup
+ulfn@chalmers.se**20140108093838
+ Ignore-this: 12f4ba6157dfaa4b21a86350096786cd
+] 
+[[make] don't cabal update in the Makefile
+ulfn@chalmers.se**20140108080500
+ Ignore-this: d9ea75adb4f5581a3376678b7152d724
+] 
+[A correctly failing test case related to issue 1015.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140108080245
+ Ignore-this: 4f0f9b989d8fa5aeb20944782f5cd95e
+] 
+[Some documentation of invariants and debug messages for size polarity.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140103134819
+ Ignore-this: 5e5613bf5da21c69d49078d082453d06
+ Plus a use of monadic conjunction.
+] 
+[Fixed a stupid loop when trying to eta-expand a bound var of non-eta-expandable record type.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140101215312
+ Ignore-this: 941543b4b548d23b66ee11b27695c21d
+] 
+[testcase-376
+sattler.christian@gmail.com**20131231032020
+ Ignore-this: ad8151e2ad9e1150303d425888c58097
+] 
+[Removed some retired code, reformatted a comment.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140101171214
+ Ignore-this: 3c03eb66bb1a04a8d231bdba6a8be8d7
+] 
+[Refactor: use ifNotM instead of if (not <$> ...).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140101165354
+ Ignore-this: b7d451c74eedf0001ec5f95d5f022037
+] 
+[Refactored reification of interaction metas.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20140101162302
+ Ignore-this: 1694c07a530e1421976d4972a582d24a
+] 
+[[ issue 376 ] Implemented expansion of bound record variables during meta assignment.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131230130131
+ Ignore-this: bfd1daad95f7e2f86b9626e505bf708b
+ Now Agda can solve for metas X that are applied to projected variables, e.g.:
+   X (fst z) (snd z) = z
+   X (fst z) = fst z
+ Technically, this is realized by substituting (x , y) for z with fresh
+ bound variables x and y.
+] 
+[Removed some retired code in MetaVars.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131230114925
+ Ignore-this: 4f7addcb47d7211ba3b24c2db9929333
+] 
+[Utility: eta expand a context-bound variable of record type.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131230113930
+ Ignore-this: 8341763ecf2cb17abf352bdf02990577
+] 
+[Utility whileLeft: loop as long we have an exception.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131230113714
+ Ignore-this: d5981d6297e759df17dfa8bf26dda510
+] 
+[Refactor: setRange for MetaInfo.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131230113628
+ Ignore-this: a53a2b076b89f1a7c1ac9de8badec3e7
+] 
+[Fixed typo in debug message.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131230113532
+ Ignore-this: 66ebe3cd30739255599b31655e55c0ed
+] 
+[An utility function curryAt to curry a function over records.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131229162729
+ Ignore-this: 59f1cdd2dda141cca7c6177db6a92d17
+] 
+[Refactored result of inverseSubst to prepare for eta-expansion of projected vars.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131228184809
+ Ignore-this: 255525f3f78b2dcd5489f2c6c4650908
+] 
+[Refactor: retired Agda.TypeChecking.UniversePolymorphism.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131228184623
+ Ignore-this: 13c88706c5c7e8961ad49d1946308499
+ An almost empty module with a boot-file, just slows down compilation
+ of Agda.
+] 
+[Fixed issue 1003.  Instance constraints solved by unification are now discarded.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131228162711
+ Ignore-this: c3eb05d66ba2f18aa2478664112b8c5e
+] 
+[Microfactor: renamed rec to v to prevent ghci parse errors.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131228154617
+ Ignore-this: 89dd79888b019127f8d7c2e4b925f1d1
+] 
+[Fixed issue 1009.  Extended lambda need to be added as Function, not Axiom.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131228154516
+ Ignore-this: a20f3428b1f772bb7bd0e70a89e6bc9a
+ Otherwise addClause fails.
+] 
+[[ issue1005 ] fixed: print deBruijn indices when complaining that vars of the same name are different
+ulfn@chalmers.se**20131221080608
+ Ignore-this: 71a0c0774ce2c021f23d650850a3e074
+] 
+[[ issue993 ] changed to Data.Hash (from data-hash) which provides a portable hash function
+ulfn@chalmers.se**20131220184822
+ Ignore-this: 6cc38db128e3bb63cef52030b5209c77
+] 
+[[ issue 993 ] got rid of timestamps completely and rely on hashes instead
+ulfn@chalmers.se**20131220181127
+ Ignore-this: 277b895cc4a354a493fe533faf179566
+   - still using Data.Hashable for the hash function which isn't portable,
+     but that only matters if we want to ship Primitive.agdai not for normal
+     usage
+] 
+[[ issue 993 ] need to store hashes of imported modules as well
+ulfn@chalmers.se**20131220123858
+ Ignore-this: aaab83dd5d0e255c42cad3832da2221a
+] 
+[[ issue 993 ] compute and store source hash in interface file
+ulfn@chalmers.se**20131220112646
+ Ignore-this: 53b490887f521ed8a07a6d2d82df1fed
+   Preliminary patch:
+   - not looking at the hash yet
+   - non-portable hash function (from Data.Hashable)
+] 
+[[ issue 999 ] fixed: don't apply constructors to module params when building instance search candidates
+ulfn@chalmers.se**20131220094538
+ Ignore-this: 9b3388f079af05262856b10fece7a145
+] 
+[The expression to match identifiers in vim syntax files should only succeed when the identifier is surrounded by whitespace, or another word boundary.
+me@vikramverma.com**20131217104636
+ Ignore-this: d503a5c0d099af3cf942cf08435dc1d3
+] 
+[[ issue 59 ] fixed problem with dot patterns and with inlining
+ulfn@chalmers.se**20131218105325
+ Ignore-this: 9a762f5fcf7aad1d82d571f5866b4825
+   - obs: terms in dot patterns are valid in the clause telescope
+] 
+[[ issue 998 ] Fixed a != a problem by giving more detailed info why these a are different.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131216194459
+ Ignore-this: 16b4823893298a66d580732a35924c37
+ There remains test/fail/Issue998e.agda to be properly addressed.
+] 
+[Refactor: added a type class AddContext as an umbrella for all the ways to extend the context.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131216091929
+ Ignore-this: 452d99dfffad7094c69095669689ba1a
+ As second step, one should replace all the variants, like addCtxString etc.,
+ by calls to the overloaded addContext.
+] 
+[[ LaTeX-backend ] Add debugging facility, refactor alignment code, squash a couple of alignment bugs in the process, add test cases for them.
+Stevan Andjelkovic <stevan.andjelkovic@strath.ac.uk>**20131205165257
+ Ignore-this: 92eaf84024c88a764ff56104aac16417
+] 
+[[ LaTeX-backend ] Change \AgdaIndent to $\;\;$ rather than \;\;, add failing test case.
+Stevan Andjelkovic <stevan.andjelkovic@strath.ac.uk>**20131127181741
+ Ignore-this: 2c3d0e3f4833f1e8025d3eb38bc88be9
+] 
+[[ LaTeX-backend] Make consecutive pattern synonym declarations work.
+Stevan Andjelkovic <stevan.andjelkovic@strath.ac.uk>**20131205153839
+ Ignore-this: 15baef9b1220467a302faf3380a10486
+] 
+[Fixed issue 994: like give, refine will now preserve user input if no metas were inserted.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131216012221
+ Ignore-this: 8c892d0a912fc34c399898f244120786
+ The test case produces a (agda2-give-action 0 'no-paren) instead of
+ a give action with the reified value (which is only alpha-equal to the user input).
+] 
+[Refactor: Safe version of (!!) moved to Utils.List, refactored typeOfBV.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131214145427
+ Ignore-this: 8996dd7c7a5a2612c04e207de46a8505
+ (!!) was defined twice before in Permutation and Context.
+] 
+[Removed deprecated escapeContextToTopLevel.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131214140454
+ Ignore-this: 38e495494c34e7eae342b0d3333e1683
+ Use inTopContext.
+] 
+[Refactored getContextTelescope to use telFromList'.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131214135836
+ Ignore-this: 369a0ab0ed8ac4862fb57e51c9ce06b3
+] 
+[Clarified addCtxTel by introducing a local loop.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131214134622
+ Ignore-this: cedb30a7ae73a933518fea114a84d242
+] 
+[Stylistic change: <$> and TupleSections.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131214134548
+ Ignore-this: 5899fe2e08d44c6a425953b4124b8c49
+] 
+[Rewrote getContextArgs by a use of zipWith instead of a comprehension.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131214134440
+ Ignore-this: 2b6c6c1aeb55e322cbe0b71b2e51bfc
+ (Makes it obvious that no elements are filtered out.)
+] 
+[Removed duplicate work done by underAbstraction that is already performed by addCtx.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131214134147
+ Ignore-this: 5e7a3370d3b2bb2bb086d1673fc93516
+] 
+[Refactored color conversion into class ConvColor.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131214122305
+ Ignore-this: e5974763fc5bb7732afe363da78cad85
+] 
+[Refactored duplicate mkTel into bindsToTel.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131214120939
+ Ignore-this: 600827aeb1dbd79334ea0ddfb41a9a1
+] 
+[Telescoping lets are now disallowed in record and data telescopes.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131214104902
+ Ignore-this: 6c0efa2012109e4edaf48e347c1f9db9
+ This is not a final decision.  
+ Feel free to allow them and make them work properly.
+] 
+[Fixed problem with module applications in module telescopes.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131210201436
+ Ignore-this: fd2c7ed15a7c7fe63467d74a76cb6c97
+ Module telescopes need to be scope-checked outside their module,
+ otherwise the number of free variables is off for the stuff they
+ introduce into the scope.
+ If the module telescope contains open statements, the module
+ needs to be wrapped into an anonymous module to ensure
+ the open statements have only local effect.
+] 
+[Resolved conflicts resulting from adding TLet (Nicolas) and removing TNoBind (Andreas).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131210171337
+ Ignore-this: 4f4a8a89b409e9562407a0fe5af1919f
+] 
+[Removed retired code for lowerMeta in InteractionTop.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131210164932
+ Ignore-this: 1eef2ca53532ab0541bf05442774b538
+] 
+[Telescoping lets: Local bindings are now accepted in telescopes
+Nicolas Pouillard <nicolas.pouillard@gmail.com>**20131111132335
+ Ignore-this: d653872adef1a0f5dc0ddad9202d93e7
+ 
+ The syntax of telescopes as been extended to support 'let':
+ 
+   id : (let * = Set) (A : *) -> A -> A
+   id A x = x
+ 
+ In particular one can now 'open' modules inside telescopes:
+ 
+   module Star where
+     * : Set1
+     * = Set
+ 
+   module MEndo (let open Star) (A : *) where
+     Endo : *
+     Endo = A -> A
+ 
+ Finally a shortcut is provided for opening modules:
+ 
+   module N (open Star) (A : *) (open MEndo A) (f : Endo) where
+     ...
+ 
+ This hack has been made in collaboration with Daniel Gustafsson.
+] 
+[Micro-refactor in checkLambda.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131214130105
+ Ignore-this: a23d995f7941d908bdb5ba2498cbbd96
+] 
+[Concrete.hs: making LamBinding and TypedBindings into Functors.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131214104545
+ Ignore-this: 797df72a96ecbbaef6defccd3f859e8
+] 
+[Refactored away toTypeBinding by a better type for makeDomainFull.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131211131907
+ Ignore-this: a600f0a3dd79d54c145af4e39f0c7930
+] 
+[added a couple of missing DeriveTraversables
+ulfn@chalmers.se**20131211191713
+ Ignore-this: 5eb4117d73d257d15e8823c692216b4e
+] 
+[Support for text 1.0.*.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20131211162353
+ Ignore-this: 2c0f6a7a3d6f410ba93121df33520f76
+] 
+[Cosmetic line break change.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131210201638
+ Ignore-this: f4a698507b512d59f795aab2ffd506f0
+] 
+[Debug messages: reordered msgs for inferDef to get more info before crash.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131210201605
+ Ignore-this: 5ddc11d0cb652ac4934f06ceb9d98440
+] 
+[Micro optimization: getContextSize instead of size <$> getContext.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131210201518
+ Ignore-this: ae397f6584113419156352364f97d0e8
+] 
+[Release notes for Agda.Primitive: add note about standard location.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131210170915
+ Ignore-this: eac1e1ae08490447d672071fd530760f
+] 
+[Add gelisam to darcs' author list.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131210163037
+ Ignore-this: df6e534877d2c96792500c98fd259465
+] 
+[Refactor: eradicated unused TNoBind constructor from Abstract and Concrete.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131210162952
+ Ignore-this: 3786f46610262b9ac6bdc206321ad982
+ I guess TNoBind was an Agdalight relict (docu used Agdalight syntax).
+ Removed the associated dead and (consequently) untested code.
+] 
+[Forgot Eq instance for OpenShortHand.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131210161837
+ Ignore-this: e5339cad9c1773ff4bc8670d734e5ab1
+] 
+[Optimization of Map.lookup k (Map.union m1 m2) into a use of <|>.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131210160142
+ Ignore-this: a35e93ada62efb53b063f09113f20a8a
+ Unless there are smart rewrite rules, the latter cannot be less efficient.
+ I believe in compiler magic once I am given constructive proof of its existence
+ (and a proof that all future versions of the compiler keep the magic).
+] 
+[Documentation and micro-refactoring for Concrete, Abstract, and ConcreteToAbstract.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131210155545
+ Ignore-this: 46c324d7d22ed854a350a997221aca
+] 
+[Debug printing: increased level for "inverse scope lookup" to 80.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131210155230
+ Ignore-this: c9c21dfb87b4eb5c009b7351abfc80b5
+] 
+[Changed the documentation of Agda.Primitive.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20131210125748
+ Ignore-this: b744ba5315e384a6d7c5a7027ef37263
+] 
+[Fixes to the release notes concerning Agda.Primitive.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131207010825
+ Ignore-this: 2df33c7665cf62d9f4937ac5b3c2ba92
+] 
+[Set default --termination-depth to infinity, making flag obsolete.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131204201728
+ Ignore-this: acacc2cceabcce554d6d780c96ab24f5
+] 
+[Refactored cutoff value in termination checker to allows for DontCutOff.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131204195256
+ Ignore-this: b46ab23ce64d1fc53eba9a007cda3edd
+ This means arbitrary termination depth.
+] 
+[Debugging the individual steps of call graph completion.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131204191739
+ Ignore-this: 9c81aaaaa2f66fac250c92bd53d70231
+] 
+[A revision of call graph completion that can deal with arbitrary termination depth.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131204191700
+ Ignore-this: c1c9c09d0c8eb98fa6e9a413751d73a1
+ This algorithm has been sitting around in MiniAgda for some time,
+ waiting for its great day.  It is now here!
+ Option --termination-depth can now be retired.
+] 
+[Remove meta-info in calls from debug printing.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131204185020
+ Ignore-this: 64d07fc41b7077e3b2da32e3de6faa28
+] 
+[Foldable and Traversable instances for (non-sparse) Matrix.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131204184815
+ Ignore-this: bba1e42263ec7eacedeced9080b8d1dd
+] 
+[Utility zipMatrices: Pointwise combination of sparse matrices.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131204184737
+ Ignore-this: 8f4c6e229c260fd024f6a489564b9bc2
+] 
+[PartialOrdering is itself a PartialOrd.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131204183755
+ Ignore-this: 700df881c70f908fd8a7fd35e83dde31
+] 
+[New utility: Agda.Utils.Map.allWithKey.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131204180655
+ Ignore-this: 1c24909029fbef1db60b0969342e8b4f
+] 
+[Utility function: a generic fixpoint iteration.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131204175620
+ Ignore-this: f74399a852f198fcc0fb3f2efc351f71
+] 
+[New module Agda.Utils.Favorites, a data structure to maintain a set of incomparable values.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131204175536
+ Ignore-this: 361bc44ebeb59e7459b164c29f8d03b2
+ Use this if you want to keep track of the best candidates seen so far.
+ (When using a partial order, there are several best candidates.)
+ Currently used in termination checker.
+] 
+[New module Agda.Utils.PartialOrd, an implementation of decidable partial orders.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131204175330
+ Ignore-this: 2f0fd03abd1b9fc4707dd3abfb81754
+] 
+[Test case 'TerminationWithInsufficientDepth' will be successful.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131204175223
+ Ignore-this: b7a7d5397d7be22709bcf01ea1a9a94e
+] 
+[Trying to fix and issue with symlinks in loading Agda.Primitive.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131130092059
+ Ignore-this: 7353f60ab9c7cca6d697fc352207e5c3
+] 
+[Fixed issue 985 (unbound vars in reporting Coverage's cannot split error).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131130183922
+ Ignore-this: 12449d67421664b009bc0f19c8b85a10
+] 
+[Added empty type, unit type, and predecessor to Common.Prelude.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131130183449
+ Ignore-this: 93a09a095a62f2614f5373f84c8d3b8c
+] 
+[Fixed some contexts in debug printing for Coverage.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131130182339
+ Ignore-this: 46dd12218c885833d1d19e61b7e6823b
+] 
+[Refactor: Sort metas are now of type Level.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131130112251
+ Ignore-this: 382b813dff9ca8bddc1064aa728a045a
+ Consequently, Inf should not be a sort constructor, but a level constructor
+ in Internal syntax.  TODO!
+] 
+[Reorganized Agda.Primitive such that Level is declared a built-in before level constructors are defined.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131130112014
+ Ignore-this: 6e5de6fec31ee440b6fc442806367b5
+] 
+[Micro-refactoring: use partitionEithers from Haskell standard lib.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131130092002
+ Ignore-this: c88f15c0e32af25c2788100933d0ed76
+] 
+[[ issue 775 ] fixed
+ulfn@chalmers.se**20131129133253
+ Ignore-this: 8591467a5665151e70f88a5c75027036
+] 
+[[ issue 976 ] fixed: parser generated bad ranges
+ulfn@chalmers.se**20131129131833
+ Ignore-this: 51f6caa4db7234db60160af5c5e3ba94
+] 
+[[ issue 983 ] fixed: reset theCurrentFile if an independent command fails
+ulfn@chalmers.se**20131129123113
+ Ignore-this: f89211181f2aabf243fdf970ae27b0d6
+] 
+[[ issue 983 ] test case, but no fix
+ulfn@chalmers.se**20131129120314
+ Ignore-this: e6614d40d9f7fd9a235d4e7c8d0baf80
+] 
+[improved performance of custom scripted interaction tests
+ulfn@chalmers.se**20131129112900
+ Ignore-this: ee5ce85a3a585f18fb63e8d65ec2b085
+] 
+[Postpone size constraint solving to make sizes work with extended lambda.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131123194504
+ Ignore-this: d8784cd37b7cab85d4d8ee21b306fb11
+ Solver now not invoked after checking extended lambda definition.
+] 
+[Micro-refactoring: a use of defaultDefn.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131123174115
+ Ignore-this: f8e6d6bc414fe4277b47c055d7b4cf0
+] 
+[[ Issue 977 ] Postulates are now allowed in old-style mutual blocks.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131123153656
+ Ignore-this: 7515e1918d581704343d3ec5d10da671
+ They were already allowed in new-style mutual blocks.
+] 
+[Tiny refactor: more direct implementation of notAllowedInMutual in Concrete.Definitions.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131123150701
+ Ignore-this: 8d3242485e1a8495c0778914147a1ff7
+] 
+[[ issue 730 ] BUILTIN NATURAL now binds ZERO and SUC
+ulfn@chalmers.se**20131127183458
+ Ignore-this: 891799ff423bcb066b50ac022b404ccd
+   - consequently trying to bind them separately gives an error message
+     explaining the new order of things
+] 
+[[ issue981 ] functions with absurd clauses mistakenly considered projection-like
+ulfn@chalmers.se**20131127123634
+ Ignore-this: b4039f7cdcc29b57468027549c81a2d6
+] 
+[[ issue 147 ] Use non-mixfix form in the "Don't know how to parse" error message.
+gelisam@gmail.com**20131124024118
+ Ignore-this: 9fd49fec15ffb0bf16ffcdd96affff71
+] 
+[Rolled back emacs key bindings for comment region.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131122211123
+ Ignore-this: 9a14a50cb99e7cd3a456574b2861bba0
+] 
+[[ issue 957 ] Now there is a proper error stating that Agsy does not support copatterns yet.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131122094410
+ Ignore-this: 4cd9d5cd1d87e884013176754e460848
+] 
+[Added nofib/N-queens.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20131122105622
+ Ignore-this: aa6ecc5be74f9e25e21a81ba1a2c3a5e
+] 
+[Refined test cases for termination checking with projections.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131122063211
+ Ignore-this: 26c39ba90e6fba3c9e6a00a6d7df8395
+] 
+[Fixed issue 959: match against record pattern must succeed, even before record pattern translation.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131122063054
+ Ignore-this: c172a37be7c24074ad1257ac8c00eb3e
+ Needed for type-checking copattern clauses which happenes before record pattern translation.
+] 
+[Refactor: removed Arg from matchPattern (was unused).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131122060522
+ Ignore-this: 7116f1c4112a43296af9d7ee9f5d8706
+] 
+[Updated error messages for Size< move to Common.Size.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131120160904
+ Ignore-this: 4bfa34142770dd5dcf69034c63fcc2c7
+] 
+[Fixed bug in termination checker that would drop coinductive projections silently when comparing elimination of variable to variable pattern.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131120145750
+ Ignore-this: f27ef9831e490cf0dabb95fb98789671
+] 
+[[ issue 970 ] fixed impossible when inlining with-function calls
+ulfn@chalmers.se**20131120103505
+ Ignore-this: 47e7ec70916170c1e8f6794f24b7e37f
+] 
+[[ issue 952 ] refactored parser to prepare for parsing of labeled implicit functions
+ulfn@chalmers.se**20131115193331
+ Ignore-this: e34e5ead15512bb15d6bf2ff5428e64
+] 
+[More low-level debug message in Reduce.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131119095934
+ Ignore-this: cbfe0ea4663af7d3a85c672296cc4dd5
+] 
+[It feels safer to start out with no eta-expansion for coinductive records from the start.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131119095831
+ Ignore-this: b443f3c80df4c96d209baa1bdc098c84
+ I think Agda actually did eta-expand some coinductive record metas before this change,
+ so this might actually fix a potential bug.
+] 
+[Documentation: Some more examples for permutations.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131119095658
+ Ignore-this: 54333a18d0578a45f7373255cc03e58c
+] 
+[Added Size< to test/Common/Size.agda.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131119095624
+ Ignore-this: 25113c55e0b79b1494c701af4fff388c
+] 
+[Fixed a bug involving copatterns and dot patterns.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131119094253
+ Ignore-this: 3ae5959d73c81abe2d0e5971e971b12e
+ Coverage checker output wrong split tree, leading to a failing reduction.
+] 
+[[ emacs-mode ] Default key bindings for (un)comment-region.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131118141956
+ Ignore-this: 60dc27bc65182a4f8a187fe7177f3bf2
+] 
+[Allow empty hiding and renaming lists in the parser.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131118141757
+ Ignore-this: 132621901d77aeb92dcf8376fefe0b09
+ They should not be errors since it is semantically meaningful, 
+ even though it's pointless.
+ It might well be that during interactive editing, 
+ the hiding list becomes empty temporarily.
+] 
+[Make Agda compile again with ghc-6.12.1.
+james@cs.ioc.ee**20131118115012
+ Ignore-this: 83ebca9b8b171398d05da9bb65d59a4b
+] 
+[[ LaTeX-backend ] Add test suite
+Stevan Andjelkovic <stevan.andjelkovic@strath.ac.uk>**20131115112648
+ Ignore-this: 73a56c597c7dc216ed207b8927426359
+] 
+[[LaTeX-backend] remove trailing/leading spaces after/before begin/end-code blocks
+Stevan Andjelkovic <stevan.andjelkovic@strath.ac.uk>**20131115113234
+ Ignore-this: ba73eb1e227cccf537f2822a056f5b71
+] 
+[Test case related to issue 840.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20131115173711
+ Ignore-this: aada68e518da3f6839596e39a0bec217
+] 
+[[ issue 963 ] renamed Agda.Prim to Agda.Primitive
+ulfn@chalmers.se**20131115110242
+ Ignore-this: 962c4f821f1ba7eecab63316bd2be921
+] 
+[[ issue 952 ] Printing alpha renamed implicit fun types with labeled preserved
+ulfn@chalmers.se**20131115104147
+ Ignore-this: 5c7628eec249ef785e911f98125535f4
+   - If A is already in scope {A : Set} -> T A is printed as
+     {A = A1 : Set} -> T A1
+   - This syntax is not (yet?) parsed
+] 
+[tested with ghc-7.2.2 and ghc-7.4.2
+ulfn@chalmers.se**20131114165736
+ Ignore-this: 4a929cfb21951d53400d65c6685e01b1
+   - ghc-7.0.2 segfaults on my machine so left it out of the cabal file
+] 
+[[ issue 962 ] ghc-7.0.3 gives incomplete pattern warnings for lambda matches
+ulfn@chalmers.se**20131114122214
+ Ignore-this: d05df67d0597065fbc0e6f02661b74e
+] 
+[[ issue 961 ] added TypeSynonymInstances to Agda.TypeChecking.Primitive
+ulfn@chalmers.se**20131114111053
+ Ignore-this: 337d54b14c329b3582ed321a3c93ace8
+   - needed for compilation on ghc-7.0.4
+] 
+[Fixed issue 157.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20131114104706
+ Ignore-this: b91b91dbf5cfabee59f8b9d87db3fa30
+] 
+[Tried to fix issue 960.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20131114104743
+ Ignore-this: 1563d4fd89732399c9e987fba58dd171
+] 
+[[LaTeX-backend] Remove excessive spacing after aligned stuff in agda.sty
+Stevan Andjelkovic <stevan.andjelkovic@strath.ac.uk>**20131112165139
+ Ignore-this: e1ef3a26e8fd201814bd8d5621b9771f
+] 
+[[ issue 157 ] now overlays unsolved meta and error highlighting
+ulfn@chalmers.se**20131113210450
+ Ignore-this: 917ed2ea4b419478273e75afeb07c531
+   - the black text property needs to be removed from the default highlighting
+     for this to look nice (otherwise you get black underlined text instead of
+     red at the overlap)
+] 
+[[ issue 59 ] expand with-function calls that may have been inserted during type checking
+ulfn@chalmers.se**20131113190723
+ Ignore-this: 41e9bd465083b78085a71e1047079823
+   - they now match the inlined clauses 
+   - metavariable instantiation is sufficiently paranoid about cycles that
+     it wasn't actually possible to exploit this to do something bad, but
+     it was an easy fix
+] 
+[[ issue 59 ] added another case to the test/fail test
+ulfn@chalmers.se**20131113183339
+ Ignore-this: 64a0ad14f21a4603644707c2488dbb65
+] 
+[added some debug printing to MetaVars.Occurs
+ulfn@chalmers.se**20131113181755
+ Ignore-this: 7af1c7b9833f94d781d317ffeff91280
+] 
+[Failed to apply the theory of decorations.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131113165346
+ Ignore-this: 865cb6247897f554367b8ecd04821252
+] 
+[The beautiful categorical theory of decorations (aka one-place-functors).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131113165305
+ Ignore-this: 62a0a4607fafe7678609af1ae2007f1b
+ Unfortunately, without applications yet.
+] 
+[Refactor: clauseArgs is an instance of patternsToElims.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131113165122
+ Ignore-this: 3a4c2642e9a15e337a4dd9908b3086f
+] 
+[[ issue 59 ] fix bug where a with-function call could get inlined in the wrong function
+ulfn@chalmers.se**20131113160110
+ Ignore-this: 71c18a0328fafc1aa7139857172ac42b
+] 
+[[ issue 953 ] documented in release notes
+ulfn@chalmers.se**20131113110035
+ Ignore-this: cc51b2e12f4eb86bc5ab052ea5b240ae
+   - also test case for parameterised anonymous module
+] 
+[[ issue 953 ] fixed
+ulfn@chalmers.se**20131113104718
+ Ignore-this: 5522c7bc1affa2773204de56122acf28
+   - you can now omit the top-level module, or, equivalently, define it as
+     module _ where
+] 
+[[ issue 953 ] the parser now inserts module _ where if no top-level module is defined
+ulfn@chalmers.se**20131113092653
+ Ignore-this: 88bad1867651dd360caf1f27c12ea9bc
+   - todo: handle that when checking module name
+] 
+[[ with-termination ] use getBodyUnraised
+ulfn@chalmers.se**20131113075750
+ Ignore-this: 8b7376a94207e569a791e7dc3c5719b6
+] 
+[[ issue 157 ] fixed unsolved meta highlighting hiding error highlighting
+ulfn@chalmers.se**20131113075655
+ Ignore-this: 6385d8a8a5d008fbcd23ad3db0f9c150
+] 
+[[ issue 945 ] correct output for interaction test
+ulfn@chalmers.se**20131113075631
+ Ignore-this: 6c70f0e09feefbb5ec7460ac7e4e53c6
+] 
+[Improved the previous fix.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20131112144155
+ Ignore-this: 98099146fb6b8c2e9c63387f3053256c
+ + The presence of a comment in the source actually broke the fix...
+ + The new test case should run much faster.
+] 
+[Updated test case after fix for issue 945.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131112143622
+ Ignore-this: 5750a71fbd368a4c33125c85eab88753
+] 
+[Tried to fix race condition reported by Andreas.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20131112140239
+ Ignore-this: 8dd143007ba0417265d784e01910c5ae
+] 
+[Updated error message for issue 949.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131112002337
+ Ignore-this: 13989e06a3cc978b5fe60cd1c6e73fa2
+] 
+[[ issue 950 ] Better split error messages for copatterns.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131112002252
+ Ignore-this: 44bdb40fcbc7f3a65fc0240389ff760f
+] 
+[[ issue 951 ] Hidden function types cannot be printed as {A} -> B, only as {x : A} -> B.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131111233833
+ Ignore-this: 777447c0f112ae3612d60a4df3137292
+] 
+[[ issue 949 ] Better error message for wrong named argument.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131111214701
+ Ignore-this: 909b5fbf3aac87748a5a9d253d4dbde7
+ Refactored checkArguments to make that work.
+] 
+[[issue 945] auto -l now reports whether or not it timed out
+ulfn@chalmers.se**20131111200148
+ Ignore-this: 2362fa89debf796d0e4f361af2e38f09
+] 
+[Partial review of new module Termination.Inlining.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131111190124
+ Ignore-this: ff5241031ac333bd2e7bf7b68d82d820
+  - Great to have this issue fixed!!!
+  - Added comments and preconditions.
+  - Replaced helper function allArgs by use of allApplyElims.
+  - Moved helper function getRHS into Substitute as getBodyUnraised.
+  - Operate inTopContext. 
+  - Use caseMaybeM.
+  - Check for omission of withExprClause could be more general.
+  - Test Issue59 does not test calls from clauses with dot patterns.
+ Did not review the main work horse: inline.
+ Looks like my review did not break anything.
+ Please review my review!
+] 
+[Cut some long-retired code.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131111175941
+ Ignore-this: 6a82a5af4e750b195b4b04ea2fc34dd4
+] 
+[A more precise comment in TermCheck.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131111175912
+ Ignore-this: 6fdf706c2f3783530ff6fb08d5bddd93
+] 
+[Refactor: new utilities caseMaybe and caseMaybeM.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131111175839
+ Ignore-this: 8b37245aed9c0304a61cb6928fc9308f
+ 
+   - Use @caseMaybe m err f@ instead of @flip (maybe err) m f@.
+ 
+   - Use 
+ 
+         caseMaybeM query default $ \ x -> interesting     
+ 
+     instead of 
+ 
+         m <- query
+         case m of
+           Nothing -> default
+           Just x  -> interesting
+ 
+     if @query@ and @default@ are short pieces of code.
+] 
+[Added -fwarn-pointless-pragmas, removed possibly pointless pragmas.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20131111152552
+ Ignore-this: 2d89c53802eccd3adffb30045f2c42a8
+ + I could either remove INLINE or SPECIALIZE INLINE. I tested both
+   options, and they seem to give more or less the same performance,
+   both when profiling and when not (at least on my current setup, and
+   for the given test case).
+] 
+[Removed -fwarn-unused-imports warning.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20131108145005
+ Ignore-this: f84c1aacce712ff05ab382ab28ad4f93
+] 
+[Replaced __GLASGOW_HASKELL__ < 707 with !(MIN_VERSION_base(4,7,0)).
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20131111134018
+ Ignore-this: 781065a38a15d8a5cde02bf4b37fcb10
+] 
+[[issue 59] fixed termination checking of with-functions
+ulfn@chalmers.se**20131111111805
+ Ignore-this: bd1debe5c3c7df8c6a65221489ec913c
+   - See Agda.Termination.Inlining
+   - Before termination checking with-functions are inlined, which
+     means that the termination checker runs on something very close to
+     the source program instead of the desugared program using a helper
+     function
+   - A minor disadvantage is that you can no longer have termination
+     paths going through with-expressions, like the following:
+       bla n with n
+       ... | zero  = zero
+       ... | suc m = bla m
+     since this is transformed into (something like)
+       bla n | zero    = zero
+       bla n | (suc m) = bla m _
+     before termination checking. This is only a problem if you do with
+     on a variable, which you never need to do. The standard library
+     checks without changes, so I don't think it's an issue.
+] 
+[fixed clause rhs getting reified with the wrong context
+ulfn@chalmers.se**20131111110033
+ Ignore-this: ecf028ab7cbf727c8fb107c2add4c2bf
+   - updated Agsy no longer generate the wrong rhs as a work-around
+] 
+[added a function clauseArgs to compute terms corresponding to the lhs of a clause
+ulfn@chalmers.se**20131111105917
+ Ignore-this: 4ad6a7b4139796256dfbee67711320c7
+] 
+[turned ClauseBody into a functor in the rhs
+ulfn@chalmers.se**20131110070353
+ Ignore-this: fe38aed7d7f3afa675a59cf58f8bd587
+] 
+[haddock syntax errors
+ulfn@chalmers.se**20131110070206
+ Ignore-this: 9b79d5503cc7f741f03bd42653ea64f
+] 
+[added a field funWith to the representation of function definitions
+ulfn@chalmers.se**20131109171851
+ Ignore-this: fa0015373009742ad30b859d68fcf149
+   - keeps track of if the function is a generated with function and which
+     is the parent function
+   - not used for anything at the moment, but it might come in handy shortly
+] 
+[[release notes] documented improvements to make case
+ulfn@chalmers.se**20131109144751
+ Ignore-this: e3bd86cdc9251b99ff611d9b37520023
+] 
+[[issue 811] fixed the remaining problems
+ulfn@chalmers.se**20131109143632
+ Ignore-this: b891fcd26845f0038ed680dd6e4470cf
+   - make case now always binds a variable at its left-most explicit occurrence
+   - if there are no explicit occurrences it's bound at the left-most implicit
+     occurrence
+] 
+[[issue 157] Unsolved metas are now highlighted in the emacs mode also when there are errors
+ulfn@chalmers.se**20131109102758
+ Ignore-this: fa255575ff15fbd29b9301814985586a
+] 
+[[build] use -j3 when building on ghc >= 7.7
+ulfn@chalmers.se**20131109091031
+ Ignore-this: 42e3314074cd54705fe99b291a873ac5
+] 
+[[issue 493] using/hiding/renaming can now appear in arbitrary order
+ulfn@chalmers.se**20131109083035
+ Ignore-this: 29bbeee49697d14db1282bd40b48a6e0
+] 
+[[issue 947] empty where blocks are now allowed
+ulfn@chalmers.se**20131109061146
+ Ignore-this: cc97ac61033bb3e26969fa4e514a5bf6
+] 
+[Refactored checkArguments (use of ifBlockedType, eliminated aux defs).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131108224546
+ Ignore-this: 12cbe77e12867cdb05e3dc052a8a9318
+] 
+[Issue 731 is fixed: Level primitives needed to display constraints.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131108210451
+ Ignore-this: 17de05b54a406d3fe52798e1242a2238
+] 
+[[test] put the horrible sed mangling of error messages in test/fail in a separate bash script
+ulfn@chalmers.se**20131108165920
+ Ignore-this: 4daf71adceb5e8f6ab3dc6f27dcc3768
+] 
+[moved reifyWhen into Reify and removed ReifyWhen class
+ulfn@chalmers.se**20131108134448
+ Ignore-this: 4d215e5d5c77cee5d35c6606154767ab
+   - some of the class constraints used would break in ghc-7.8
+] 
+[[ghc-7.7] TCMT needs to be a newtype in the hs-boot file as well with ghc-7.7
+ulfn@chalmers.se**20131108134343
+ Ignore-this: d756e7aa1662dc6f091140adf0fa4cf0
+] 
+[[malonzo] produce phased inline directives for nat/int conversion functions
+ulfn@chalmers.se**20131108134310
+ Ignore-this: 2ee7f710213be91cfbec6275fada630d
+] 
+[fixed some warnings emitted by ghc-7.7
+ulfn@chalmers.se**20131108134215
+ Ignore-this: ccbcc755104011d08dcbedd5839e8a71
+] 
+[[cabal] relaxed array constraint to allow ghc-7.7 array lib
+ulfn@chalmers.se**20131108134145
+ Ignore-this: 987365d2d1b8d7cd996d9e7dccfc6d56
+] 
+[don't use deprecated Data.Binary.runGetState
+ulfn@chalmers.se**20131101084044
+ Ignore-this: 6eefed48c34058dcf76cb1f9322192a8
+   - can now actually build with 0.6 =< binary < 0.8 as claimed
+   - on the other hand binary-0.5 is no longer supported
+] 
+[base-4.7 has more functor instances (added #ifdef)
+ulfn@chalmers.se**20131101083946
+ Ignore-this: ae4379c3791ba2d73b564bf927367bd9
+] 
+[[build] relaxed some package constraints to make Agda build on ghc-7.7
+ulfn@chalmers.se**20131030083832
+ Ignore-this: f97de5644ef11fe26ddc1ff1a04aa1f9
+] 
+[Fixed issue 532.  open public is now accepted in records even before the last field.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131108141942
+ Ignore-this: a9f7fdcfbdc7f4b59efa9ec3d96922d1
+] 
+[[issue 762] fixed impossible issue
+ulfn@chalmers.se**20131108080113
+ Ignore-this: 13555d893726bd8c7012f273d65c3781
+   - auto still doesn't like open metavariables
+] 
+[Fixed issue 899.  Instance candidates are now considered module judgmental equality.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131107221853
+ Ignore-this: 96d35bcf803d120bf89edb53fe3870b3
+] 
+[[Issue 670] Drop parameters of projection(like) functions found by instance search.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131107213701
+ Ignore-this: b22675a2f9ba9131d1c2aa2b4c8de837
+] 
+[Changed error messages forgotten by patch "Removed commented-out import statements".
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131107202248
+ Ignore-this: cbc3b641afcd4b23da9d6a712cc28744
+ Yes, even removing commented-out lines can break the test suite!
+ E.g., fail/ImpossibleTest (my long-term favorite test case)!
+] 
+[Fixed issue 906, 942.  When comparing copattern spines in the termination checker, projections appearing earlier in the record are considered smaller wrt. structural ordering.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131107201742
+ Ignore-this: 3d852043835363ded7309984e078b5ca
+ This reflects the dependency order. 
+ Needed for defining dependent records by copattern matching.
+] 
+[Restored highlighting of proper projections.  Clarifies projection copatterns a lot!
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131107163035
+ Ignore-this: 5dcae99e57cea475cb47bfa884027e13
+] 
+[Removed commented-out import statements, moved some import statements.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20131107135555
+ Ignore-this: 967dfb7710c2a2b2bb8b62685881bd21
+] 
+[[issue 835] fixed: unsolved constraints now print with range if there is one
+ulfn@chalmers.se**20131107141413
+ Ignore-this: 31f7663a7a537d4b4997a4891ab30e8
+] 
+[[issue 756] fixed: lets and extended lambdas are no longer valid in dot patterns
+ulfn@chalmers.se**20131107133455
+ Ignore-this: f8b739883795290191e27e07e027064f
+] 
+[removed gratuitous line breaks when pretty printing records and extended lambdas
+ulfn@chalmers.se**20131107112325
+ Ignore-this: 93f34c64ae068342b5acef20770f0249
+] 
+[[issue 535] fixed part one
+ulfn@chalmers.se**20131107102315
+ Ignore-this: 3e2bd27d8c16c0d825612671b6719ebf
+   - make case now uses named implicits to avoid unnecessary implicit arguments
+] 
+[[interaction test] minor update to error message after fix to issue 936
+ulfn@chalmers.se**20131106213757
+ Ignore-this: 7e4d45127ee110cf02cffdfaa5368bcf
+] 
+[[issue 535] changed clause patterns and constructor argument patterns to NamedArgs
+ulfn@chalmers.se**20131106213013
+ Ignore-this: 8ab3a8d0b7202c492d3bf6d484c0f7c7
+   - this paves the way for pretty printing patterns with named implicit args
+] 
+[Highlighting test cases have changed due to the fix for issue 936.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131106134942
+ Ignore-this: 3b6025c435cf99d4c4c534824fa6feb3
+] 
+[Fixed issue 940: copatterns in parametrized modules.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131106134747
+ Ignore-this: 2c7bdecffcb35436c5fbe5d77c5f859c
+ Projection function was applied to module parameters twice 
+ because of a use of typeOfConst instead of defType <.> getConstInfo.
+] 
+[Less frequent annoying debug messages from reifier.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131106134331
+ Ignore-this: 667be5ec8b6d11a44795e233f7ac9473
+] 
+[[issue 936] added output for interaction test
+ulfn@chalmers.se**20131106103437
+ Ignore-this: a41b71302c79dc08cf7c2db2dbcbcf67
+] 
+[[issue 936] don't create highlighting info for Agda.Prim
+ulfn@chalmers.se**20131106103206
+ Ignore-this: dbb79041eda31a2efd1ea69261e0680a
+] 
+[Interaction test case for Issue 936.  No highlighting should be generated for Agda.Prim.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131106103247
+ Ignore-this: 5e62efb591eaf3e50ba703692c424306
+] 
+[[issue892] fixed completely
+ulfn@chalmers.se**20131106093418
+ Ignore-this: 1405adfb6b5de5c4603c5cc70ff33850
+   - the problem was that the scope checker didn't handle
+     module application properly in the presence of open public
+] 
+[[issue 892] fixed one part of the problem
+ulfn@chalmers.se**20131106085729
+ Ignore-this: ead9f0bc1e5f06eced8df130c8a3fa1d
+   - make sure the empty name used for the record parameter inside
+     record modules doesn't leak into the types of the functions
+] 
+[[interaction test] updated output with missing highlighting command
+ulfn@chalmers.se**20131106083419
+ Ignore-this: a1acb8182a1e1cdb9f561c6c18b0f3a7
+] 
+[[interaction test] slight change to regexp for ignoring temp file paths
+ulfn@chalmers.se**20131106083308
+ Ignore-this: ae7fd10294695e35b0b40c825f7e074c
+] 
+[Fixed issue 939: irrelevant projection pattern should put us in irrelevant mode.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131105161416
+ Ignore-this: b89d7870a085b48da9adfec936b33cb8
+ Added 'Arg' to the 'clauseType' to keep track
+ whether we have to check the RHS in irrelevant mode.
+ Q: Anything todo about dot-patterns here?
+] 
+[Fixed coverage checker for dependent copatterns (related to Issue 937).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131105111322
+ Ignore-this: e1700b6c15d5e5d9c14b2644a078ca3a
+] 
+[Fixed issue 937: Split on copattern did not apply the function to the free variables of the section.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131105011700
+ Ignore-this: 5c64a93cd76a6a637c3bca6998e8da97
+] 
+[Slightly nicer debug printing.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131105011514
+ Ignore-this: 986720388979f3c9b11080b25f72aaec
+] 
+[Commenting: Explanations about definitions living in top-level.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131105011052
+ Ignore-this: d33125522bd0ecefbd227e7a93386b16
+] 
+[Minor clean up of give in BasicOps.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131105010948
+ Ignore-this: cbfeeb955ab25fd03454f5994f7dc958
+] 
+[Boilerplate lowerMeta is now instance of generic traversal, and other small refactorings.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131104214835
+ Ignore-this: a252147dbbe526b5d709a33e9a91affb
+] 
+[Generic traversal for Syntax.Concrete.  (Just mapExpr for now.)
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131104214645
+ Ignore-this: af38acb1f7db5ba3f301517269bcb0fd
+] 
+[More pointless refactorings, using <.>.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131104214539
+ Ignore-this: 4092709ded556e381ae0624ebd925c98
+] 
+[Fewer of these scope debug messages (only from -v 40 now).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131104214447
+ Ignore-this: fb9c90bf024f7985d0b737bd7c130749
+] 
+[Auxiliary function addClauses.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131104210723
+ Ignore-this: a3cd52510892a69f2039dd1cf33a60c
+] 
+[Fixed issue 933: glitch in SyntacticEquality.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131103001531
+ Ignore-this: 847124fe9553cf88c91fbe71853eab33
+] 
+[Now Agda.Prim contains the level primitives and is automatically imported.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131102192052
+ Ignore-this: e4b5f15beebaf96504b63f497c2424ef
+ Removed tons duplicate level builtin declarations from the test suite.
+ A problem remains in interaction/Error-in-imported-module:
+ An invalid emacs command is created there (with unterminated string).
+   (agda2-highlight-load-and-delete-action "
+ I suspect that is because an __IMPOSSIBLE__, indicating a violated invariant,
+ is swallowed by a too general exception handler (Control.Exception.bracket)
+ in Agda.Interaction.Highlighting.Emacs.lispifyHighlightingInfo.
+ Probably an invariant concerning stModuleToSource is broken by my attempt
+ to fit the auto-import of Agda.Prim in a suitable place in 
+ Agda.Interaction.Imports.
+] 
+[More tests that pattern variables do not shadow constructors, for copatterns and flexible arity.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131102104931
+ Ignore-this: 1e0dea37d01512e99ebb01dfd266d21b
+] 
+[forMaybe is just flip mapMaybe.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131101182334
+ Ignore-this: 5f6e3842022493dbc4fd8d3aba35bdf9
+] 
+[Clarified noShadowingOfConstructors code.  No need to normalize type!
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131101182251
+ Ignore-this: a5947db148c19b0fa50831956c49d29f
+ Q: Should that not be checked for record constructors as well?
+] 
+[Cosmetics: separated constructor tools from datatype tools.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131101182055
+ Ignore-this: eb831ec41192e380c5629595fb24ee76
+] 
+[Pointless refactoring in DisplayForm.hs.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131101175857
+ Ignore-this: 96f1640a9307e3ff886bfc2c302fe343
+] 
+[ElimView now only reduces projection-like functions.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131101175756
+ Ignore-this: dce570d9eab10cb0aa75b9a4b0b2dee
+ This makes checkInternal more faithful, it reduces now
+ really only projection-like functions, which it needs
+ for bidirectional type-checking.
+] 
+[Cosmetics: removed commented out code concerning elimView, added comments.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131101170908
+ Ignore-this: a20492d6d768f4a08aff511166450768
+] 
+[removed unnecessary check from CheckInternal
+ulfn@chalmers.se**20131101133156
+ Ignore-this: 93ac693607651488ee48494b2c58b5e4
+] 
+[Issue 590: Reverted to the old behaviour.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20131101110026
+ Ignore-this: c2b2c0aa86d010adabaa4ce39b81a9d8
+] 
+[Fixed a misspelling in Olle Fredriksson's name.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131101105944
+ Ignore-this: f640091b2be22d9d47b0f9ec4969d895
+] 
+[[release-notes] documented C-c C-h
+ulfn@chalmers.se**20131101094948
+ Ignore-this: 59304397e3e627a03285b35fb8b50066
+] 
+[removed non-sensical functional dependency
+ulfn@chalmers.se**20131101083922
+ Ignore-this: b69a734567d6fcf61d7b53d51a85bbad
+] 
+[Fixed issue 930.  
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131031162734
+ Ignore-this: ce5ebc2afd84dcc4377159c99d8f77a4
+ Each of the two things fixes this issue:
+ * When sort comparison fails but type comparison succeeds, 
+   try sort comparison again instead of throwing the old
+   sort error.
+ * Fix sort comparison: pointwise comparison of Max not allowed
+   if any term contains a meta (could be buried in a neutral level).
+] 
+[Removed superfluous option --universe-polymorphism from two tests.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131031162417
+ Ignore-this: be75aaf52cc8d8c6abf67dda578ee422
+] 
+[HCAR November 2013.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131031125201
+ Ignore-this: ad18488a202cf341d88a1ddb0c15578b
+] 
+[Added more author spellings.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131031124921
+ Ignore-this: d6642b7954bc0b380eec507d417ed34
+] 
+[Added default include dir $HOME/.cabal/share/Agda-x.y.z/lib/prim.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131030201747
+ Ignore-this: c5cdce4f0f8c606e103769d38cc48b03
+ The path is communicated to Agda by cabal's generated Paths_Agda module.
+ Contains an empty module Agda.Prim so far.
+ Failed test suite machinery deletes the user- and version- specific parts of 
+ this path.
+] 
+[Fixed a broken failed test case (wrong filename instead of intended error).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131030201240
+ Ignore-this: 4b383e2b21560be5cfcaa32d4e04ae0f
+] 
+[Cosmetics: renamed some identifiers and added a comment.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131030194330
+ Ignore-this: 3d631a09d7a3c2bb1ffe0fd435a3f556
+] 
+[Refactor: lenses for Options to modify the TCState.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131030192811
+ Ignore-this: 9a078f12ae5852b31fb8ec5c3ab1e42d
+] 
+[Cosmetics: structured file to separate lenses for different TCState components.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131030160209
+ Ignore-this: d78dee5fff10e0f12e69b813135c489b
+] 
+[Fixed 2 comments in Syntax.Internal.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131030153503
+ Ignore-this: ea0c6e51c9697b9c74682e817f2f4e70
+] 
+[Fixed an issue with verbosity not honored before successful load (see also issue 641).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131030153400
+ Ignore-this: 44ef5ab38e0250df9de2b217ed1fba17
+] 
+[Changed the way in which records and extended lambdas are printed.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20131030163006
+ Ignore-this: 2d6cf9953f676916301dc1a2066f0f46
+] 
+[Removed Resp_MakeCaseAction, which was a special case of Resp_MakeCase.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20131030162357
+ Ignore-this: 6d437ff557b6fa4e19f61ca1f9aa29b0
+ + The Resp_MakeCase constructor's type was also modified.
+] 
+[Fixed issue 590.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20131030162253
+ Ignore-this: 7d7fab4873dd5eb0aa8b402859f8b091
+] 
+[Merged in 2.3.2.2 patches.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130927202200
+ Ignore-this: 25d9dd780c50c7d8d3192a85a2614d48
+] 
+[Added a task to the release procedure.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130927200839
+ Ignore-this: 5fdc06d62e426c470ed9ad6d121944bc
+] 
+[TAG 2.3.2.2
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130927195945
+ Ignore-this: 6f31e10da86878c3851eb5056ae7bd1
+] 
+[Updated the copyright year range.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130927195920
+ Ignore-this: f4cafecd4c8adf3a4f687bf3fcaa877e
+] 
+[Preparation for release (2.3.2.2).
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130927185638
+ Ignore-this: 7daf94e79cc11707be3a2493d23b01b5
+] 
+[Release notes for Agda 2.3.2.2.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130927185432
+ Ignore-this: fa852bb353bef4989af8a5cbd513be1d
+] 
+[Added some disclaimers to the README.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130927183935
+ Ignore-this: 6057f47299e2c2311466bd6a589883b
+] 
+[Renamed GhcTop to EmacsTop.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20131030110343
+ Ignore-this: a7c6a6d54ef4161c3a2229779f35981a
+] 
+[A debug message for inverseScopeLookup.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131029213945
+ Ignore-this: 436dc22a5c8872da219b3a6105115be7
+] 
+[Tiny code modernization: use of unless, isNothing instead of case-of.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131029195722
+ Ignore-this: 7738373ecdccf2f082c81f6d33ef2f1e
+] 
+[A debug message on shadowed pattern vars.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131029173548
+ Ignore-this: a72d381ed3eae08e5877d6e08592476a
+] 
+[Micro-refactoring in AbstractToConcrete.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131029173436
+ Ignore-this: 1044fddcb52944403c2004209d7a4d1
+] 
+[Fixed issue 927: DontCare no longer impossible in variable linearity analysis in Miller unification.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131029154814
+ Ignore-this: daf10c0081f29dcbec8870d866005053
+] 
+[Use smart constructor dontCare instead of DontCare consistently.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131029154709
+ Ignore-this: 5c546e38983b7b93c03cd7c6b68fdc51
+] 
+[Cosmetics: print debug messages in proper context in MetaVars.assignV.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131029154515
+ Ignore-this: 979eff21c7325860d39b4d2ed2d94b6a
+] 
+[Added commented-out import Common.Level.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20131027220328
+ Ignore-this: ff9f4eb37a7f8b43f3b67ea787b555ea
+] 
+[Fixed broken compilation of Reduce.hs (issue 926) and removed a stupidity in Patterns/Match.hs.
+andreas.abel@ifi.lmu.de**20131027195649
+ Ignore-this: f2b931556f90e9da7a54a35db5e260b
+] 
+[Fixed issue 907.  We now reduce with previous function clauses to check the current one.
+andreas.abel@ifi.lmu.de**20131027134818
+ Ignore-this: af21de0785cb80be0541e495520041a3
+] 
+[Refactoring in preparation of issue 907: distinguish function signatures from other type signatures in A.Axiom.
+andreas.abel@ifi.lmu.de**20131027132955
+ Ignore-this: 5be890585cba027608e32fffa561a0df
+ Now, function signatures are added as empty Functions instead of
+ Axioms during declaration checking.
+ This means we can add their function clauses later, one by one.
+ Detailed change list:
+ Added FunSig boolean type and an extra such argument to A.Axiom.
+ Removed three redundant definitions of A.axiomName.
+ Added emptyFunction as template for Function Definition in Signature.
+ Refactored a bit in Rules/Data.
+] 
+[Optimization for underapplied redex is wrong for copatterns and functions of flexible arity.  Removed.
+andreas.abel@ifi.lmu.de**20131027132656
+ Ignore-this: ab26bc84a912f5aa8eb34c644b982974
+] 
+[Cosmetics: removed excessive indentation in let dataDef.
+andreas.abel@ifi.lmu.de**20131027131533
+ Ignore-this: ae619cdd2dbb02c614261e181c9a2be7
+] 
+[New lens for modifying funClauses in Signature.
+andreas.abel@ifi.lmu.de**20131027131350
+ Ignore-this: 4be2310f75cc0db01acd2185409a6fd4
+] 
+[Refactor: defaultDefn creates Definition with usual defaults.
+andreas.abel@ifi.lmu.de**20131027130912
+ Ignore-this: e2cbdef6d4a1122e6643a49dfe254ece
+] 
+[Removed TypeChecking.RebindClause.  This module has been an empty shell for years.
+andreas.abel@ifi.lmu.de**20131027130143
+ Ignore-this: 176142c5b137fe72f3ada0c126605eb0
+] 
+[Small refactoring and documentation of normalization for the purpose of telescope reordering.
+andreas.abel@ifi.lmu.de**20131027123710
+ Ignore-this: 53fd0ec772c5cb7786d21aaa0931c08c
+] 
+[Tiny optimization of getContextTerms.
+andreas.abel@ifi.lmu.de**20131027123428
+ Ignore-this: fdb71039335b1a756e2aa3d241cd1b08
+] 
+[Updated comment for instantiateFull (has been wrong for a long time).
+andreas.abel@ifi.lmu.de**20131027123136
+ Ignore-this: 40a7572a8b309f930bf7c334a71659c
+] 
+[Tiny refactor: moved mlevel to TypeChecking.Level.
+andreas.abel@ifi.lmu.de**20131027122934
+ Ignore-this: ef0b74f148153ee94192da56078027c6
+] 
+[Debug message for looping over terms in termination checker.
+andreas.abel@ifi.lmu.de**20131027122751
+ Ignore-this: f04acf27a52b1bcb494ed950793f7d02
+] 
+[Removed harmful special matching against irrelevant args (has been sleeping for a long time in previously dead code).
+andreas.abel@ifi.lmu.de**20131027122512
+ Ignore-this: fc55b0e02c272219fd2b5e8e7a966ab3
+] 
+[Debug message in Patterns.Match.
+andreas.abel@ifi.lmu.de**20131027122328
+ Ignore-this: 5892bd4f72ec7ad24565a996830673da
+] 
+[Tiny improve: preserve argInfo in Patterns.Match.
+andreas.abel@ifi.lmu.de**20131027122150
+ Ignore-this: 246c210f8e20a3c9f298c21f0d9f4ae5
+] 
+[Tiny refactor: moved (<$) operator (flip ($>)) to Utils.Monad.
+andreas.abel@ifi.lmu.de**20131027122008
+ Ignore-this: b9583f16a333c14f2dcb5ec55d5701c9
+] 
+[Successful test case TerminationOnIrrelevantArgument: whitespace, verbosity options.
+andreas.abel@ifi.lmu.de**20131027121401
+ Ignore-this: bae7aeae101011462f3a31b31c348137
+] 
+[Failed test cases Makefile: reactivated TwoCompilers test case.
+andreas.abel@ifi.lmu.de**20131027121218
+ Ignore-this: 3ee3fdfca1e0e62202d20eba282266ac
+] 
+[Refactor: funCompiled :: Maybe CompiledClauses need for partial function definitions (see Issue 907).
+andreas.abel@ifi.lmu.de**20131026131835
+ Ignore-this: c0dfb7ff6a601fd790a9a42545f6efc9
+] 
+[Tiny refactor: use getBody in Epic.Injection.
+andreas.abel@ifi.lmu.de**20131026123619
+ Ignore-this: b0a17936b0060e100eae87ac6f08bbc4
+] 
+[Tiny refactor: use getBody in Reduce.hs.
+andreas.abel@ifi.lmu.de**20131026123402
+ Ignore-this: 57dd226d2cfb02dbf04d51434060f7f5
+] 
+[Cosmetics: cleaned import list in Reduce.hs.
+andreas.abel@ifi.lmu.de**20131026123228
+ Ignore-this: c9aada8796e67bc9cf2f4631483c481c
+] 
+[Tiny refactor: 'for' for functors and a use in Injectivity.
+andreas.abel@ifi.lmu.de**20131026122427
+ Ignore-this: a015d94bd7e8ad18f557b62601ed3cfa
+] 
+[Cosmetics: indentation in Reduce.app
+andreas.abel@ifi.lmu.de**20131026121545
+ Ignore-this: 1b53f2f07b360e2f1e93239e446d4506
+] 
+[Cosmetics: removed long retired code.
+andreas.abel@ifi.lmu.de**20131026121504
+ Ignore-this: 6e8dbd99cb900f3491093398dbf4060b
+] 
+[Small refactor: new function getBody for clause bodies, use in Injectivity.
+andreas.abel@ifi.lmu.de**20131026121053
+ Ignore-this: 45cc9c21f8e02ffceaabf88b3b6d8b8f
+] 
+[Cosmetics: some section headings in Substitute.hs
+andreas.abel@ifi.lmu.de**20131026120941
+ Ignore-this: 91f8bfeec8ecd939bee47e4cfe91057b
+] 
+[Proper error message when function type is eliminated by a projection copattern.
+andreas.abel@ifi.lmu.de**20131026100258
+ Ignore-this: bfa61ea4dcc2b077b1b0e03cdf3b7320
+] 
+[Cosmetics: removal of excessive indentation.
+andreas.abel@ifi.lmu.de**20131026090018
+ Ignore-this: a8a813f8b7e468abfcad1e6355b88b99
+] 
+[Issue 790 is fixed.
+andreas.abel@ifi.lmu.de**20131025231708
+ Ignore-this: fbde85194f38b22dc1ecf6e8b68c965e
+] 
+[Original test case for Issue 920 by Jesper Cockx.
+andreas.abel@ifi.lmu.de**20131025224203
+ Ignore-this: 8101bf83e0543489d96f569628bf1e0a
+] 
+[Fixed issue 920.  Non-linear variables can be attempted to be pruned, but not more.
+andreas.abel@ifi.lmu.de**20131025223249
+ Ignore-this: 7f3d3063570b6c5d6688529a3993f999
+] 
+[Mostly cosmetic restructuring in assignV; use subst instead of abs followed by app.
+andreas.abel@ifi.lmu.de**20131025213946
+ Ignore-this: 79bf19f0dcc516d133a47ac983515ba4
+] 
+[Attempted to install double-checking of meta solutions.
+andreas.abel@ifi.lmu.de**20131025213740
+ Ignore-this: c93feb3553fca081edd7a69eb5d80e3b
+ Failed because sort metas have inaccurate type.
+ TODO: clean up sort metas. (Larger refactoring, I guess.)
+] 
+[Fixed issue 924 (never ending normalization in unifier).
+andreas.abel@ifi.lmu.de**20131024191416
+ Ignore-this: b88d96e1d145cdcdcb73f3f33961ae4d
+ Normalization is now only invoked when unifyAtom is inconclusive.
+ (Normalization is needed for eta-contraction of flexible vars,
+ see issue 423).
+] 
+[Issue 893 is fixed by checking with-function-types in internal syntax.
+andreas.abel@ifi.lmu.de**20131022195921
+ Ignore-this: 6cb9e928423d0323fc33ad9068828484
+] 
+[Cosmetics in Coverage.hs: recTel is unused.
+andreas.abel@ifi.lmu.de**20131022194624
+ Ignore-this: 2e35abf725785420dd000a1f9111f253
+] 
+[Using the bidirectional checker for With function types.
+andreas.abel@ifi.lmu.de**20131022194501
+ Ignore-this: 9d85b111cb4ef22e94c2985fa3b5aabe
+] 
+[A bidirectional type checker for Syntax.Internal.
+andreas.abel@ifi.lmu.de**20131022194212
+ Ignore-this: 301b7734aa996fdf1763be6ae03248a0
+] 
+[Made I.Type a functor and fixed unbound dB indices in an error message about bad overloaded constructors.
+andreas.abel@ifi.lmu.de**20131022194049
+ Ignore-this: d46db83284d420e636475fbcc825c047
+] 
+[Factored out getDefType to get type of possibly projection-like function applied to the parameters; added applyDef to apply a projection(like) to its first argument.
+andreas.abel@ifi.lmu.de**20131022192338
+ Ignore-this: e74b4476b2144db922fc4ec3071642fc
+] 
+[Tiny refactor: moved name Suggest class to Internal.hs.
+andreas.abel@ifi.lmu.de**20131022191820
+ Ignore-this: 9e81bd7d9833f73a299822ef7e8b3ac2
+] 
+[Factored out a test to tell whether a Def is eligible as type of the principle argument of a projection-like function.
+andreas.abel@ifi.lmu.de**20131022191245
+ Ignore-this: a4ed56553f771f7570e080179b97e323
+] 
+[Factored out getConType to get the type of a constructor applied to the parameters.
+andreas.abel@ifi.lmu.de**20131022190847
+ Ignore-this: e66898189ad9ce3af85a069829826ebe
+] 
+[Documented in Signature.hs that a projection has to cease being one after the record argument has been applied. 
+andreas.abel@ifi.lmu.de**20131022190409
+ Ignore-this: ea40b4ce052a39806ed7c6a9428990c1
+] 
+[Cosmetics: some cleanup in Signature.hs (reformatting, deleting of long-retired funs).
+andreas.abel@ifi.lmu.de**20131022185909
+ Ignore-this: f2bc47f52e6b52a1726d3c9dbedd75c4
+] 
+[Some comments added to Rules/Record.hs and Monad/Base.hs to track the addition of record parameters to the field telescope.
+andreas.abel@ifi.lmu.de**20131022185649
+ Ignore-this: 4027b7d6fcd8373b8abddcc904420880
+] 
+[Another, larger testcase for With from the std-lib.
+andreas.abel@ifi.lmu.de**20131022183658
+ Ignore-this: 7c6258c8a1faaba6917c93bae52f5835
+] 
+[A test case for With extracted from std-lib.
+andreas.abel@ifi.lmu.de**20131022183553
+ Ignore-this: 2e4b09c663dd9491fdfb40dd4fb9cb8a
+] 
+[Rolled back addition of ignoreSorts.
+andreas.abel@ifi.lmu.de**20131022182816
+ Ignore-this: b0e5ef14961bb4d194beb00967bddf4d
+] 
+[Added ignoreSorts and envIgnoreSorts to ignore sorts during conversion checking.  Did not do the job, however.
+andreas.abel@ifi.lmu.de**20131022182534
+ Ignore-this: 4cd6dfffe6deee59001e8e4e3dc49b0d
+] 
+[Tiny refactor: levelType to get primLevel as a Type.
+andreas.abel@ifi.lmu.de**20131022182113
+ Ignore-this: 1e420e0c315f0b9e157ab9bdb59d640f
+] 
+[Tiny: fixed capitalization in error message about wrong constructor.
+andreas.abel@ifi.lmu.de**20131022181904
+ Ignore-this: e7de5a4c41fdd9fa090b840b73c48d24
+] 
+[In Common.hs, zapped some retired code and added defaultDom.
+andreas.abel@ifi.lmu.de**20131022175957
+ Ignore-this: 63f22c7db8cca1c9e86e116ccd8a4342
+] 
+[Added import Level to some test cases to print debug messages.
+andreas.abel@ifi.lmu.de**20131022175722
+ Ignore-this: 9676719e2bd358a0bc2c559d0c679521
+] 
+[The test case for issue 921 is actually a failing one.
+andreas.abel@ifi.lmu.de**20131022175619
+ Ignore-this: d85a1b8c6a7792b387f18e9972ef9205
+] 
+[Fixed a long-sleeping bug in Builtin.hs.  NATEQUALS result was checked against Nat instead of Bool.
+andreas.abel@ifi.lmu.de**20131022174042
+ Ignore-this: 310b6c3118db8f2256cf0d066049cd1b
+] 
+[Issue 901 is fixed by eta-expanding projected metas.
+andreas.abel@ifi.lmu.de**20131021205103
+ Ignore-this: 7d2e555abc1017fe8a1fdc124e6d3ca2
+] 
+[Fixed issue 922.  Instance search for unused/irrelevant metas was started in wrong context.
+andreas.abel@ifi.lmu.de**20131021202551
+ Ignore-this: 18800b6ae7fc53880802017f2ec981cd
+] 
+[Inessential changes to Copatterns testcase.
+andreas.abel@ifi.lmu.de**20131020181119
+ Ignore-this: 968de22acf4d24f0f8802b85cc43bf57
+] 
+[Fixed a problem with duplicate DontCare constructors related to irrelevant projections.
+andreas.abel@ifi.lmu.de**20131020173646
+ Ignore-this: 1611ca7234a31c0f008eb43d1bd24c44
+] 
+[Fixed the displayform problem caused by the big Elims refactoring.
+andreas.abel@ifi.lmu.de**20131020172030
+ Ignore-this: a57ea5d19ab4c530c3f8791bed330731
+] 
+[Fixed issue 921.  Non-reducing definitions (blocked by failed termination check) yielded an impossible situation.
+andreas.abel@ifi.lmu.de**20131020170107
+ Ignore-this: bb9c74a718b34bcfc7379cb46fd3fc35
+] 
+[After Elims refactor, fixed a problem in with-abstraction and one with irrelevant projections.
+andreas.abel@ifi.lmu.de**20131020155250
+ Ignore-this: f8bf841b5ba37369ee047166a0c327db
+] 
+[Refactor: Added projDropPars and original projection name to Projection.
+andreas.abel@ifi.lmu.de**20131020100535
+ Ignore-this: 1970118bb16ba434d8302e43d2c7a4c8
+ This is part of the big spine representation refactoring.
+ Issues with display forms remain.
+ Also, I discovered a bug introduced by short-cut projection reductions,
+ which does not respect irrelevance (Issue543a).
+] 
+[Refactor: I.ConP now also carries ConHead instead of QName.
+andreas.abel@ifi.lmu.de**20131019131820
+ Ignore-this: 1669cf83b221864db5ff2dfc264c0535
+] 
+[Big refactoring: internal syntax in spine form.
+andreas.abel@ifi.lmu.de**20131019114605
+ Ignore-this: b7306bcc42e353f2f6685a578755da52
+] 
+[Fixed issue 918 (internal error triggered by termination checker).
+andreas.abel@ifi.lmu.de**20131014185429
+ Ignore-this: c301b4b054087449cd6bad9193220413
+] 
+[Removed trailing implicit insertion in Def.hs.  This fixes issue 919.
+andreas.abel@ifi.lmu.de**20131013135133
+ Ignore-this: daa5e4a5b474e541b948fec97e89dca
+] 
+[Termination checker now moves hidden lambdas to lhs (used for copatterns).
+andreas.abel@ifi.lmu.de**20131012044326
+ Ignore-this: 79a6d7baf34fc3d7516a0e3bf66151a5
+] 
+[Make trailing implicit insertion do nothing for copatterns (see Def.hs).
+andreas.abel@ifi.lmu.de**20131002115736
+ Ignore-this: 30f0c395e097a2650b1c38b47eded21d
+] 
+[changed shortcut for helper function to C-c C-h and cleaned up names a bit
+ulfn@chalmers.se**20130925144404
+ Ignore-this: b31a2605c93281a4018ee30ff19dfae
+] 
+[allow implicit arguments to created helper functions
+ulfn@chalmers.se**20130925143957
+ Ignore-this: 2b727ba6fa50a7452b0359e95aab3d8d
+] 
+[omit types that can be inferred (print as forall) when printing helper function type
+ulfn@chalmers.se**20130924115928
+ Ignore-this: 7fc4107b4ea1f9b16552b4bfdaa4aeef
+] 
+[copy type signature to kill-ring in helper function command
+ulfn@chalmers.se**20130924104710
+ Ignore-this: 466ae606b829b916197d738d06a4585d
+] 
+[added a command to generate the type signature for a helper function
+ulfn@chalmers.se**20130923141405
+ Ignore-this: 5808e57eba824424b1085ae8455a41b0
+   - currently C-c C-j
+   - writing f e1 .. en in a hole will (try to) generate a type signature for a
+     function f such that f e1 .. en would be accepted in the hole.
+] 
+[Fixed issue 911.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130923161210
+ Ignore-this: 59d4a9f85cdf84deb9566c125844103d
+] 
+[Support for Alex 3.1.*.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20130918221708
+ Ignore-this: ea707fef36878c266beea0d482c84a9c
+] 
+[[term] Removed a TODO note.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130919102345
+ Ignore-this: 7ea73240bdf34416567e9c99da8d4c16
+] 
+[[term] Partial support for J and refl.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130918160143
+ Ignore-this: 493cad1f2b8485bc846f7428eb39d2c
+] 
+[[term] Modified an error message.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130918161556
+ Ignore-this: 4742b6f6e75a19839292223533dc2cd6
+] 
+[[term] Added some code.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130918161259
+ Ignore-this: 51d699ea0fe9bac6553cac8ed570e20
+] 
+[Restored test removed by Andreas.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130918160843
+ Ignore-this: e852ad2ea4880dafbb80ee25a92db729
+] 
+[[term] Fixed bug in checking rule for lambda.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130918160129
+ Ignore-this: e80ff4f4da69e00a82bbf4f4c7e27e6e
+] 
+[[term] Fixed bug in pretty-printer.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130918140756
+ Ignore-this: 160a6d0ded890e4f48c348af2ee4299c
+] 
+[[term] Fixed bug in checking rule for lambda.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130918114145
+ Ignore-this: d883c5ca342a0f73e325ff9b1c2ab02e
+] 
+[[term] Removed K.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130918095324
+ Ignore-this: dc0e4d77e561319ed8a20e6638c6c3a5
+] 
+[Fixed Issue637.out.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130918100338
+ Ignore-this: 8b2bd5377f9896245439ae429d6a09ef
+] 
+[Removed verbosity from some tests.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130918100306
+ Ignore-this: 3cfe8a609fc8df5161b9f90d22e60758
+] 
+[Tiny code simplification in LHS.Implicit.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130918100216
+ Ignore-this: a3b309998bb8a09df67b3748f4090209
+] 
+[Copatterns in internal syntax.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130918100128
+ Ignore-this: 7463dea4a469ec14528c888464374bf1
+ Release notes and initial work for With.
+ Unsupported yet: With, Auto, Compilers.
+] 
+[A debug message for eta record in Conversion.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130917101541
+ Ignore-this: 6fa6a78d89c1b8cdde6dcbb53790bed2
+] 
+[Fixity for <.> in Utils.Monad.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130917101455
+ Ignore-this: dcb29ac0bab1008619a89ef64f922738
+] 
+[Added a comment to Internal.ConP.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130917101406
+ Ignore-this: 6e864415017c7431c1393c7ff7ed837
+] 
+[Refactor: put spineToLhs into a type class.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130917101319
+ Ignore-this: 8750fdda88f637d0cbc5d390078947a3
+] 
+[Better error message when lhs gives too many arguments.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130916095042
+ Ignore-this: 1f28f3292de35d5aad1463dea2ca69e3
+] 
+[Copatterns: raise error if record field (open R r) is used in copattern instead of projection.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130913051813
+ Ignore-this: fc8355e8c018e045f86c37803689cd33
+] 
+[Some things work now with copatterns.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130712142237
+ Ignore-this: da6e6fcddaee52ca1a18378a39fdb23e
+ TODO:
+   * fix termination checker
+   * make traling hidden arguments and copatterns work together
+   * fix compilers
+   * with
+] 
+[Copatterns in Internal syntax (incomplete, breaks --copattern tests from suite)
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130706102551
+ Ignore-this: f9294857c2b7facd255b58f330bab158
+] 
+[[term] Fixed bug in substs.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130918094803
+ Ignore-this: eb6e7aaa533a9b23d9b3843e24603528
+] 
+[[term] Tried to fix bug in evaluator.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130918094141
+ Ignore-this: aa3c5bcceac7346172fb1904fe4d2c27
+] 
+[[term] Generalised bang, replaced all uses of (!!) with bang.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130918093848
+ Ignore-this: fe301c39a5aabbac73ecd7e08cfb47b
+ + The function bang now supports infinite lists.
+] 
+[[term] Modified the treatment of blocking in the checking rule for lambdas.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130918090839
+ Ignore-this: 7dc05194497f2eede272e5b75fb9c941
+] 
+[[term] Made the evaluator (whnf) more complete.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130918085412
+ Ignore-this: f46792a859d374e08091bf9a58a6d03a
+] 
+[[term] Added checking rule for projection applications.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130918081128
+ Ignore-this: ab3c0ce8ece1497bb502897f098d4e8a
+] 
+[[term] Noted some problems.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130918073504
+ Ignore-this: 38f9063f19421f787168be5f0f17ecf5
+] 
+[[term] Refactoring: Turned isApply into a top-level function.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130918071853
+ Ignore-this: 6aa8ed8d478ff438f2a541b9603342ed
+] 
+[[term] Partial support for checking lambdas.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130918064740
+ Ignore-this: 9e2ebf4244d97847ec8cfa2aeb484a9
+] 
+[[term] Added var :: Var -> TermView.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130918065054
+ Ignore-this: b7d03d0389b102f8f11e154d2c4456a5
+] 
+[Turned off eta-contraction that results in partially applied record constructors.
+andreas.abel@ifi.lmu.de**20130918053847
+ Ignore-this: 7887879cc52c6eb52e6e09b50580acd1
+ For instance, \ y -> x , y is no longer contracted to _,_ x.
+ Should we do this also for data constructors?
+ Like no longer contracting \ y -> suc y to suc?
+] 
+[Inessential: Haddock for Syntax.Internal.conFields extended.
+andreas.abel@ifi.lmu.de**20130918053648
+ Ignore-this: 6b3af97a80ea44618eb482c230b5e4fc
+] 
+[Fixed issue 889: Miller pattern unification extension works only for fully applied record constructors (full application was not checked).
+andreas.abel@ifi.lmu.de**20130917154313
+ Ignore-this: 78172095d1f9cbf69331ba66b35ab39c
+] 
+[[term] Partial bug-fix: Infinite loop due to self-instantiation.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917222148
+ Ignore-this: 611cfacc40428681d2330b357b874b03
+] 
+[[term] Added TODO note.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917221726
+ Ignore-this: bf7ae58c84dc2a56682edecdeaed5e1d
+] 
+[[term] Inference rule for the equality type.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917215108
+ Ignore-this: de8d1b0f086bcb40f207069109a1258d
+] 
+[[term] Added some Show instances.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917214053
+ Ignore-this: f203bfb6fe9c80d57b23c983e45a3eb3
+] 
+[[term] Bug fix: Number of args now checked after insertion of implicit args.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917212350
+ Ignore-this: 1a575570b68b58d27beb682c81d643e7
+] 
+[[term] Fixed another substitution bug.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917210912
+ Ignore-this: a6f68e9121ec87f69f99f70106f418c3
+] 
+[[term] Fixed bug by switching to parallel substitutions.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917205737
+ Ignore-this: 202b0ddc2d31ffd6cda3d6661d69ddc2
+ + The previous substitution-related bug "fix" wasn't correct.
+] 
+[[term] Pattern matching is now only allowed for /data/ constructors.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917193721
+ Ignore-this: 10a18aeaa838eae018580a64ddcfc99e
+] 
+[[term] Added Show instances for Clause and Definition.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917185726
+ Ignore-this: 5dcb0f87983290112fdf94deaaf5dcdb
+] 
+[[term] Made the scope checker stricter.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917185151
+ Ignore-this: 33478a2262179506029cd7f5ad83d0ad
+ + The scope checker now ensures that constructors are fully applied,
+   and that constructor type signatures end with the data type applied
+   to its parameters.
+] 
+[[term] Added Eq instance for Expr.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917173019
+ Ignore-this: 6ced323febf9d1eaea6b4489271ef80b
+] 
+[[term] Fixed bug in substsTerm.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917163456
+ Ignore-this: b6966c824177839c9146eed2318b84cd
+ + This bug was tracked down together with Andreas Abel.
+] 
+[[term] Added Show instance for Tel.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917163345
+ Ignore-this: d54bf1bff7c4878b622ced241ec79c36
+] 
+[[term] Fixed bug: Added missing module header.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917154357
+ Ignore-this: 8c4687c542fd387e66f8b2ba76199bf2
+] 
+[[term] Implemented "Set = Set".
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917154239
+ Ignore-this: a54d9b531e91d4a8f51cdea2acad5829
+] 
+[[term] Implemented checkRec.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917153444
+ Ignore-this: d0b6752cb4345972447c1571620f29b4
+ + This and some preceding patches were implemented together with
+   Andreas Abel.
+] 
+[[term] Added field names to the TypeSig type.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917153037
+ Ignore-this: 901730200cd06e1bd92e71d85b4693d7
+] 
+[[term] Added Subst and Weaken instances for Telescope.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917152807
+ Ignore-this: 2580d074ef628dc5edec344010383a87
+] 
+[[term] Made absApply more general.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917152738
+ Ignore-this: 9ba47c20d79b20eea4dd526fffaadfdb
+] 
+[[term] Cosmetic changes.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917152710
+ Ignore-this: d8fa7f01d32d0ce4e70a2f019a0d06e3
+] 
+[[term] Added the Substs class, removed substTel.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917152640
+ Ignore-this: 40bffc2032f677913351d94bb6c8abd3
+] 
+[[term] Tried to fix a bug.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917151620
+ Ignore-this: 8b1835755c54b7ba14f941dcc341cfe
+ + When a constructor was added the wrong telescope was saved.
+] 
+[Fixed issue 903: possible IMPOSSIBLE in meta assignment.
+andreas.abel@ifi.lmu.de**20130917112929
+ Ignore-this: b1fab163f1a22048557708a13502d4c3
+] 
+[Tried to fix issue 873.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917103833
+ Ignore-this: d561a1b7b2b22d7041835ade25c0d629
+] 
+[Fixed whitespace issues.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917095913
+ Ignore-this: ef75ab648b4cae918df9c2862edfc6bf
+] 
+[Fix the remaining bug of issue 848
+guillaume.brunerie@gmail.com**20130917093731
+ Ignore-this: 9fef28b69e959d18d67b8874053915e4
+ 
+ The previous fix of issue 848 did not allow having several (or nested) anonymous
+ where modules (because the module was actually called "_"). Now a fresh name is
+ generated.
+] 
+[Added a comment.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917095324
+ Ignore-this: bfa72729a0396df635eaf7de64d8b0ac
+] 
+[Test case for issue 902.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917095205
+ Ignore-this: 18ff3c5da4354dca0dfbbf826fe26cb4
+] 
+[fix printing of module applications
+Andrea Vezzosi <sanzhiyan@gmail.com>**20130916191852
+ Ignore-this: 21858a2f7040afbaba3fbf64d17f0723
+] 
+[Test case for issue 898.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130917093211
+ Ignore-this: 906a9203cd1e350171f92dbdf5af062c
+] 
+[Fix printing of extended lambdas starting with an hidden argument
+Andrea Vezzosi <sanzhiyan@gmail.com>**20130908041241
+ Ignore-this: c18cd4fb7764addd7b90f3eac0228d41
+] 
+[[term] simple equality check include meta instantiation
+ulfn@chalmers.se**20130917094032
+ Ignore-this: a1c61221a37cc5fbb6c8488260a6d071
+] 
+[[term] fixed bug with src locations in scope checker
+ulfn@chalmers.se**20130917074329
+ Ignore-this: 211f1bb446f8bf017bfa6c5813ed41ff
+] 
+[[term] start on type checker with simple deBruijn term representation
+ulfn@chalmers.se**20130917074227
+ Ignore-this: 3e7f27416eee7486e60a9d99aba57e37
+] 
+[[term] cpp'ing different implementations
+ulfn@chalmers.se**20130916070558
+ Ignore-this: fd3422781eb5d5fdca0a3e963555a177
+] 
+[[term] replaced funky unicode arrow-on-top with 's
+ulfn@chalmers.se**20130916070527
+ Ignore-this: e8f6b8bd57fa4a7190c3c507c47e778a
+] 
+[A performance issue was fixed in hashable 1.2.1.0.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20130916111435
+ Ignore-this: c22bad5fb7721c1cb44b7881d8e9c5d5
+] 
+[Removed unnecessary import in Context.hs, to please the precise-imports-Nazi.
+andreas.abel@ifi.lmu.de**20130915100136
+ Ignore-this: a7cdfa9277f75c7a424f3311b1ae3d83
+] 
+[Fixed two more ill-scoped debug messages in Record.hs.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130915093204
+ Ignore-this: 43c45075bf0816bec188ac8cbd1e9c36
+] 
+[Language change: Module parameters are now hidden in the types of projections.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130915091429
+ Ignore-this: 2740a9b6ee74276f63e6e0ec8d20bffb
+] 
+[Fixed scope for printing debug messages in top (empty) context.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130913152244
+ Ignore-this: 9ebadf4d07212d03a899d0161aef293
+] 
+[Inessential: a more detailed debug message.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130912210602
+ Ignore-this: ce18406296a6eeb2bbeb210d5aebc768
+] 
+[Some benchmark runs on Andreas laptops.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130615113046
+ Ignore-this: 56fccb83791cfb207dfe68d64be3c20c
+] 
+[More examples.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130913200752
+ Ignore-this: 64760303e4a9be7b0d36f944a4ecb3d5
+] 
+[Added some examples.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130913155843
+ Ignore-this: 33f051c9cc0785845974dce7f40855b4
+] 
+[[term] added an Agda prelude to allow examples to be checked by Agda
+ulfn@chalmers.se**20130913145105
+ Ignore-this: 17fb7bc4edc74c29dab4576e264613b4
+] 
+[[term] allow _ and ' in names
+ulfn@chalmers.se**20130913145047
+ Ignore-this: 804d65a89a9151a265d32a1d0c8c1d22
+] 
+[[term] added postulate syntax
+ulfn@chalmers.se**20130913144840
+ Ignore-this: bfe0ec6943e3989e422deab0172e1e75
+] 
+[[term] added Sigma and True to Basic example
+ulfn@chalmers.se**20130913144029
+ Ignore-this: 48caed732076710e0ed868577c0ec4f3
+] 
+[[term] fixed bad scope checking of dependent records
+ulfn@chalmers.se**20130913143906
+ Ignore-this: b0d3e2bf9173794f46a3dee16bb04bb6
+] 
+[[term] silly bug in grammar
+ulfn@chalmers.se**20130913143847
+ Ignore-this: 234b6ea8b68963722d9499b7d94e622d
+] 
+[[term] allow record with no fields
+ulfn@chalmers.se**20130913142942
+ Ignore-this: cdf878d6047d03e3f13528cdd397ff38
+] 
+[[term] top-level module and optional imports
+ulfn@chalmers.se**20130913142857
+ Ignore-this: 5c07df61ff6e05dc46ef5e338b790a38
+] 
+[Added a rough, incomplete sketch of the language.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130913142011
+ Ignore-this: 609dd49ee960f4d94e25ab5a3446023f
+] 
+[Fixed/detected messages are now sent to stderr.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130913141235
+ Ignore-this: d106bfb6ea54fa5d38b8f76664ed358c
+] 
+[[term] fail if dist doesn't exist after creating it
+ulfn@chalmers.se**20130913141816
+ Ignore-this: 5179ccdf1fc60e54481eb47a3383a1ad
+] 
+[[term] create the dist directory if it doesn't exist
+ulfn@chalmers.se**20130913141645
+ Ignore-this: 11761b9593bbed3affa6db64788fa04c
+] 
+[[term] fixed whitespace
+ulfn@chalmers.se**20130913141032
+ Ignore-this: 3337906c32ca437e0d0dadd6a621f224
+] 
+[[term] fixed bug in implicit argument insertion
+ulfn@chalmers.se**20130913140930
+ Ignore-this: dc2ac21ffb01a91a24a0f2bb0ad79540
+] 
+[[term] pretty printing abstract syntax
+ulfn@chalmers.se**20130913133746
+ Ignore-this: aff93e172209f5ba3baee4f01019161a
+] 
+[[term] scope checking
+ulfn@chalmers.se**20130913124336
+ Ignore-this: c170cfd443b1e2be1a09614fe5337f47
+] 
+[[term] also (x : A) (y : B) -> C
+ulfn@chalmers.se**20130912142301
+ Ignore-this: 75c6d0037f1ca1e0c59daeb509c5495
+] 
+[[term] relaxed syntax for telescopes: (x y z : A)
+ulfn@chalmers.se**20130912142109
+ Ignore-this: 3c30795e40f138b111a696ec35708eb3
+] 
+[[term] workaround bnfc silliness
+ulfn@chalmers.se**20130912140004
+ Ignore-this: dfc5f4bb1e26eb7b9637a295d65c848d
+] 
+[[term] more complete syntax
+ulfn@chalmers.se**20130912135930
+ Ignore-this: a0c9f44f4afed94e221f0b45439820de
+] 
+[[term] fixed bug in bnfc layout handling
+ulfn@chalmers.se**20130912135842
+ Ignore-this: 5c69cd2aa873d2f5199af156382324cb
+] 
+[[term] natural number example
+ulfn@chalmers.se**20130912125410
+ Ignore-this: b1241d1ac246c686d8dee53a94d0e4a8
+] 
+[[term] first approximation of syntax
+ulfn@chalmers.se**20130912124159
+ Ignore-this: ab69fd29c5535bbf2696c2bc391c1f13
+] 
+[benchmark run
+ulfn@chalmers.se**20130902144603
+ Ignore-this: 46029692b2a0b4249d85d77bcb19ca11
+] 
+[Directory for yet another term representation prototype.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130912124051
+ Ignore-this: 74be9fae5c0f07bf7bc72eb4a253171e
+] 
+[[test] changed interaction test for issue 637 to force the stack overflow to happen in actual type checking
+ulfn@chalmers.se**20130902142911
+ Ignore-this: 3f32bad588161e69225439d214e15630
+   - setting the stack to 8 bytes resulted in stack overflow before reaching the
+     exception handler for me
+   - upped the stack size to 1000 bytes and changed example to check that sum [1..100] == 5050, which
+     requires some actual stack
+] 
+[[test] generic cleanup for tests using compiler
+ulfn@chalmers.se**20130902095327
+ Ignore-this: c267d0db97311b752ee16e08bccb5bf3
+] 
+[[test] removed verbosity from a couple of tests
+ulfn@chalmers.se**20130902095255
+ Ignore-this: b1bdc72a3f04e955c3ab498527835d71
+] 
+[Reverted to the old --without-K semantics.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130829143124
+ Ignore-this: 76356e6df20f0eaba19e514aa9aecda0
+] 
+[Added --without-K fail tests.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20130726204930
+ Ignore-this: 3eb0edb38097387f5e1a87180acabd97
+] 
+[Fixed issue 681.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130821153116
+ Ignore-this: c1a28ab27de4721ecc7e966717cd7de8
+] 
+[Added support for haskell-src-exts 1.14.0.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130820091850
+ Ignore-this: 1140b3f5b75d7c3ced5fa266e8bc2e88
+] 
+[Fixed issue 882.  primTrustMe weaker now, only reduces to refl if its arguments are beta-iota-equal.
+andreas.abel@ifi.lmu.de**20130722132318
+ Ignore-this: 49eb00d985b38e7fb750351377556a09
+] 
+[Allowed more versions of hashtables.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20130711223723
+ Ignore-this: 90fd751b69aeb33be40b10b1642c562a
+] 
+[Fixed issue 877.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20130711162144
+ Ignore-this: 4fa54da0b398407435b422faf292d03
+] 
+[Cosmetic changes in Substitute.hs.
+andreas.abel@ifi.lmu.de**20130711195122
+ Ignore-this: ddb3cf086a2b1adc25146ba0d7c686cc
+] 
+[Fixed issue 856: Agda reported conversion error when postponing could still make the necessary eta-law available.
+andreas.abel@ifi.lmu.de**20130711194800
+ Ignore-this: 1e0cca9b5d7642dead54d4fb6d704403
+] 
+[Restrict to hashable-1.1.x to prevent later versions which make Agda library-test 10x slower.
+andreas.abel@ifi.lmu.de**20130711193301
+ Ignore-this: a4c686ed2b8e1b6b0238ef1ff63aa128
+ Performance bug confirmed on ghc-7.4.1 with hashable-1.2.0.10.
+ See also https://github.com/tibbe/hashable/issues/57.
+] 
+[Fixed issue 878: another no longer IMPOSSIBLE case in checking eliminations for equality.
+andreas.abel@ifi.lmu.de**20130710082923
+ Ignore-this: c99aaa7afb24db832c240f6e7201d73d
+] 
+[Added the -fwarn-unused-imports warning.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20130701140633
+ Ignore-this: 6147cfb4515df5d36afac8c226442ff0
+   Thanks to Juan Pedro Villa-Isaza for testing the patch on Windows (using
+   the Haskell Platform).
+] 
+[Fixed issue 876.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20130627223545
+ Ignore-this: c90f0cdec427f39ceeb8e9841356d8cf
+] 
+[Refactor: cleaned compareElims code, case two applications.
+andreas.abel@ifi.lmu.de**20130622174808
+ Ignore-this: ee4eecdfb4024811879deb3f25fbe459
+] 
+[Fixed issue 874: compareElims failed at meta type.
+andreas.abel@ifi.lmu.de**20130622171812
+ Ignore-this: b5c269fd9194998c8d17a055d54c72e9
+] 
+[Fixed issue 854 (part 2), infeasible conversion check.
+andreas.abel@ifi.lmu.de**20130621202240
+ Ignore-this: d2d074eb43a1b7e689b25465e0fdcab2
+ compareTerm first tries syntactic equality.
+ However, this was implemented by first doing instantiateFull passes.
+ These have to traverse the whole terms, even if they were different.
+ A new function checkSyntacticEquality integrates instantiateFull and
+ (==) on Term.  It only traverses and instanatiates as long as the
+ two candidates terms are equal.
+ This removes average-case quadratic complexity of conversion checking
+ and replaces it with worst-case quadratic complexity.
+] 
+[Testcase for issue 854 (part 2). Agda seems to loop, but it is only an infeasable conversion check.
+andreas.abel@ifi.lmu.de**20130621201928
+ Ignore-this: 22215603ed8c9f1b3deef592eafdd930
+] 
+[More debug printing for reducer.
+andreas.abel@ifi.lmu.de**20130620231250
+ Ignore-this: 955871e5f6e9c014d7ea794c3dbc956a
+] 
+[Added interaction test case for issue 734.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20130617145349
+ Ignore-this: 56c5da37d663b98d0c9c1a180a12c2ab
+] 
+[Refactor: make primClauses a list, instead of Maybe a list.
+andreas.abel@ifi.lmu.de**20130617125849
+ Ignore-this: cbf09d0f7eab20305f16aba0e3bf619c
+] 
+[Fixed issue 866.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20130615174752
+ Ignore-this: 8895770b4ff40b28aaae53e4c1b03955
+] 
+[Fixed issue 867, added missing level primitives to MAlonzo.
+andreas.abel@ifi.lmu.de**20130615143427
+ Ignore-this: d380f29aa1bbf5878e2d1254676c0a1
+] 
+[Fixed issue 870 (IMPOSSIBLE due to unreduced sort).
+andreas.abel@ifi.lmu.de**20130615130549
+ Ignore-this: d310bcd2da340a0a49b7309f3c1f7132
+] 
+[New reduction strategy: reduce projection redexes eagerly. Fixes issue 854.
+andreas.abel@ifi.lmu.de**20130615100524
+ Ignore-this: dc7f02f2df26d8f32206e6db4eadc80b
+ In internal syntax, record values now carry list of field names.
+ If a projection is applied to a record value, the respective field
+ is extracted.  These reductions happen outside of TCM, just as
+ beta-reductions, e.g. also during substitution.
+ Saves 2% on standard library (down 5 sec from 240 sec).
+] 
+[Benchmark run after fixing issue 854.
+andreas.abel@ifi.lmu.de**20130615100348
+ Ignore-this: f28457c95372993240563396f944d72c
+] 
+[Tried to understand the Serializer and added some comments.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130614170803
+ Ignore-this: b2d10ebb2fcc31b5dffb89616868519
+] 
+[Issue #756 fixed serialization bug for KindOfName
+Andrea Vezzosi <sanzhiyan@gmail.com>**20130613151016
+ Ignore-this: 50cac4fef03c8b8c670b37277c75bc63
+] 
+[Added information for updating the Agda wiki to to the release procedure.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20130611132535
+ Ignore-this: c36d757286975ad6ff43d6b283f5e544
+] 
+[Rolled back some changes related to Agda-2.3.2.1 release.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20130604162902
+ Ignore-this: 3c88895330bfb7e27f1aa3ba06e6a2f6
+] 
+[TAG 2.3.2.1
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20130604161920
+ Ignore-this: 6fcbb91c132e48c543c3181e3b0f1851
+] 
+[Added announce on the Agda mailing list to the release procedure.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20130604160556
+ Ignore-this: 7751465245b6e68dacc6d95bb4193cc7
+] 
+[Updated tested-with field.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20130604160408
+ Ignore-this: d890429719e67d1690a438ab98bd0d70
+] 
+[Preparation for Agda-2.3.2.1 release.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20130604160326
+ Ignore-this: 1977d4bc6a465fc8051529739b6f6746
+] 
+[Added some debug printouts (-vmalonzo.definition:10).
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130610152143
+ Ignore-this: b7ffe148c51894670cf4f861c1b83af7
+] 
+[Remember linear parameters that are dropped during apply (see Issue 865).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130604095636
+ Ignore-this: 8fe3d4149d14b90a03510d967c003deb
+ Delayed dropping (Drop a) that allows to pick up dropped stuff again,
+ e.g. when abstracting a module telescope.
+] 
+[Forgotten changed interaction output for 857.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130604082126
+ Ignore-this: 225fa46f9ca15be0a440df6423040cba
+] 
+[Fixed fix for 857. Now skip arguments of absurd lambda.
+andreas.abel@ifi.lmu.de**20130603192407
+ Ignore-this: 98e5b9a767484227eb8b23158fb88bfc
+] 
+[Added test case for issue 857.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130603094937
+ Ignore-this: bff320fa9b5f4f0c86b6932c1b9112d4
+] 
+[Fixed issue 857 (absurd lambda equality) again.
+andreas.abel@ifi.lmu.de**20130602152946
+ Ignore-this: d0a9f558bd5aa340a248ea2d0047ca9b
+ Undid representation of \ () as \ x -> x.
+ Created aux definition as before, but now accept two absurd
+ defs as equal.
+ Printer also honors absurd lambdas.
+] 
+[Make --without-K less restrictive [Issue 712].
+andreas.abel@ifi.lmu.de**20130530143843
+ Ignore-this: 6f9b69a9f63609f33b1b0eb7fd68955f
+ We distinguish parameters into three groups:
+ * non-linear ones (like in the identity type) which we treat as indices
+ * big ones (like A in List A) which we ignore in the analysis
+ * the rest, which we treat as before.
+ Fixes issue 712 and several examples from the mailing list.
+] 
+[Refactor: Clarified code of Data.fitsIn.
+andreas.abel@ifi.lmu.de**20130530083309
+ Ignore-this: 3280e1ddb7fd6501e323e854d8986650
+] 
+[Forbid matching on coinductive records.
+andreas.abel@ifi.lmu.de**20130530065933
+ Ignore-this: f4751b849bc1c34061f1ea28a4b3df3d
+] 
+[Respect singular in error message for IndicesNotConstructorApplications.
+andreas.abel@ifi.lmu.de**20130530063636
+ Ignore-this: ec5e1b3715663f44cd3052c9f5cf7e50
+] 
+[Added another test case related to issue 690.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130528210703
+ Ignore-this: f6cf1002937dbef0a4e90e54646f425c
+] 
+[make Agda compile again with ghc 6.12.1 by switching on type synonym instances in various places.
+james@cs.ioc.ee**20130527115239
+ Ignore-this: 9a191d9a9f27d7b440df4a2ca79f37fd
+ 
+ src/full/Agda/Syntax/Concrete/Pretty.hs
+ src/full/Agda/Syntax/Internal/Generic.hs
+ src/full/Agda/Syntax/Translation/ConcreteToAbstract.hs
+ src/full/Agda/Termination/TermCheck.hs
+ src/full/Agda/TypeChecking/Abstract.hs
+ src/full/Agda/TypeChecking/DisplayForm.hs
+ src/full/Agda/TypeChecking/Free.hs
+ src/full/Agda/TypeChecking/MetaVars/Mention.hs
+ src/full/Agda/TypeChecking/MetaVars/Occurs.hs
+ src/full/Agda/TypeChecking/Polarity.hs
+ src/full/Agda/TypeChecking/Positivity.hs
+ src/full/Agda/TypeChecking/Quote.hs
+ src/full/Agda/TypeChecking/Rules/LHS/Unify.hs
+ 
+] 
+[Release notes for fix 857: absurd lambdas.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130524230542
+ Ignore-this: a648a4932d1391dd757624ea558fef4c
+] 
+[Typo in release notes fixed.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130524230502
+ Ignore-this: 9e8d77ec783ff4a53316afe537a77d81
+] 
+[Fixed issue 857: absurd lambdas are equal now.
+andreas.abel@ifi.lmu.de**20130524224841
+ Ignore-this: 24f344fb36d99ef30b5fd212d04b07a7
+ Absurd lambdas are now internally represented as \ x -> x, 
+ with () as variable name for x.
+] 
+[How not to fix issue 856 (test case asserting not pruning in blocked things).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130523140833
+ Ignore-this: 94292823d064849f3f6a9bbce43adb47
+] 
+[Fixed issue 734: goal types were normalized too far.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130522170351
+ Ignore-this: 7d7d6dc87227e22f2ce9b065899b59e4
+] 
+[Refactor: introduce type Projection for info associated with projections.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130520184301
+ Ignore-this: afb4a57ac87de014044d5b71fa15ea1c
+] 
+[Debug only: downgrading a debug level.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130520184433
+ Ignore-this: c02448d25b60e936987b11557de7c205
+] 
+[Added failed tests for the --without-K option.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20130521042536
+ Ignore-this: 76667b25cba9debeb84d25568fc030bb
+] 
+[Fixed (parts of?) the Emacs side of issue 850.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130522125254
+ Ignore-this: 93dd0fe416d47c200ce1d5962984a8df
+] 
+[Fixed issue 852: report all (generated) calls failing termination checking.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130520144457
+ Ignore-this: 9a261e21e050c161365a870477d66541
+ Behavior is not back to what it was before the lasy callInfo
+ generation suggested by Andrea Vezzosi, but we keep the performance gains!
+] 
+[Switched to simplification (instead of normalisation) in emacs interaction.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130520103315
+ Ignore-this: ae266d841c7feaca1b3682d5ff565bbd
+ This is for experimentation purposes.
+ Key-bindings for full normalisation should also be added.
+] 
+[Fixed compilation of Agda (bad code in last patch).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130520092951
+ Ignore-this: c1428bdbe51caf9c80caab034918f510
+] 
+[Put the simplifier behind the normalize command C-c C-n for experimentation purposes.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130519205010
+ Ignore-this: 50d9c7be8fa3bcd305dcbe9690912b98
+] 
+[A simplifier (issue 850).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130519204433
+ Ignore-this: 6e28bfb63120e32fdb2b5fdef370c156
+ The simplifier only unfolds definitions if later a constructor/literal pattern is matched.
+] 
+[Irritating error message oscillation (Issue720). 
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130519172046
+ Ignore-this: 77f9eda9874373b9f8415d8939f21bee
+ Rollback of a changed error message contained in the last patch.
+] 
+[Compiled clause matcher: slightly optimized stack pushes.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130519175214
+ Ignore-this: 97df18232a9a757b05a062232d8bdcc2
+] 
+[Commented and compacted the code of the compiled clause matcher.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130519171910
+ Ignore-this: 8087193f4f96f654a9625071d0e29def
+ This involves a slight, but according to my experiments,
+ insignificant deoptimization:
+ There might be more test for the empty stack and more prepends 
+ of the empty list to the stack which might not get optimized
+ away by GHC.  However, the code is shorter, more comprehensible, 
+ and avoids cut-n-paste now.
+] 
+[Reverted an incorrect (?) modification.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130519151843
+ Ignore-this: 368bf04b86dbc6b2639e535df25bac30
+] 
+[Lazy printing of callInfo in termination checker.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130519145334
+ Ignore-this: ef6f70d89c30f68f641928bf5c61566b
+ Saves 12% on the std-lib!
+ Suggested by Andrea Vezzosi.
+] 
+[Refactor: better interface for getDefs, exposing the Monoid.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130519000611
+ Ignore-this: 97773d78f9bcc284cbd448ac30cb9322
+] 
+[Refactor: use Foldable.mapM_, of course.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130518234506
+ Ignore-this: 8ebce5dd05a2cc152b42ade9f89dcf7a
+] 
+[Refactored Andrea Vezzosi's cyclicity test (pre-termination check).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130518224420
+ Ignore-this: 51972aea350d631d56b94e97568bb69c
+ Code to extract used definitions reimplemented in Syntax.Internal.Defs.
+] 
+[Avoid termination-checking non-recursive definitions.
+Andrea Vezzosi <sanzhiyan@gmail.com>**20130518002211
+ Ignore-this: 233c7a88bce80d2588f6e57a07ef91d5
+] 
+[Improved fix for issue 848: open anonymous where-module.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130517090622
+ Ignore-this: 8ded8ca2c5baaf99c9afaf240aaf61fe
+] 
+[Added a toy benchmark.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130515125606
+ Ignore-this: 8d9dcf3abc4c78eeb4c5e822c3341631
+] 
+[Finished new postponement strategy for conversion checking dependent things.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130515091241
+ Ignore-this: 7627b7701686b9f24574faaced40dcb2
+ If check2 depends on equality check1 of two terms, and check1 gets
+ stuck, we no longer postpone check2, but we rather created a blocked
+ version of one of the two terms and use this in check2.
+ This allows the conversion check to proceed a bit further in some
+ cases, e.g.
+ 
+   f : (x y : Nat) -> C x y
+   f a1 b1 =?= f a2 b2
+ 
+ If we get stuck on a1 =?= a2, we now still try b1 =?= b2, substituting
+ for x a version of a1 which is blocked by problem a1 =?= a2.
+] 
+[Improved on fix for 846, restoring unsolved metas for fail/Issue399.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130514234452
+ Ignore-this: f567b92e70c94336a08318476ec11c4e
+ Stealing constraints is the answer!
+] 
+[Forgotten changed errors (fix of issue 846).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130514225035
+ Ignore-this: 8fb8393ebf9ffd626c4dec5b400245bb
+] 
+[Fixed issue 846: Improved conversion check for pi-types, which makes instance search smarter.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130514221149
+ Ignore-this: c2e81a410a3bd2e8c2d36bbd31d935c0
+ The problem with 846 was that some hole was instantiated by some
+ ill-typed record constructor (under unsolved constraints), leading to
+ a crash during attempted eta-reduction.
+] 
+[Some debug messages for record eta-contraction for analyzing issue 846.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130514165616
+ Ignore-this: 8ea90de417cace0676ff2138c1bc7eec
+] 
+[Fixed issue 849: coverage checker unsound.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130514164531
+ Ignore-this: 971f11eeb68c7a9bc66569e2bf80525b
+ A dot pattern which could not be parsed into a pattern used to match any constructor pattern.  This lets functions with missing clauses pass the coverage checker.
+] 
+[Fixed issue 847 (in a slightly different way).
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130514145149
+ Ignore-this: 9a57f8cdc16512578a6ee43a264566e1
+] 
+[Cosmetic change.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130430084758
+ Ignore-this: c6a163958afb759009ec5543b9d89c6b
+] 
+[Fixed Issue 848: allow anonymous module in where clause.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130514142851
+ Ignore-this: 5fd3ea98005d705e9b55667f47111d12
+] 
+[Fixed issue 847: body of abstract definitions was ignored during termination checking.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130514141551
+ Ignore-this: e8358745d4a1f9691665191060593161
+] 
+[Fixed issue 843: incorrect translation of let-bound patterns into projections.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130506150241
+ Ignore-this: 7c50007f9957283053828f2f15262fc6
+] 
+[WontFix issue 836: constructors/fields also qualified by data/record name.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130502121532
+ Ignore-this: d74e76dddcced131b9b7d2231cbc4701
+] 
+[Fixed issue 842: Too short lhs in function with varying arity.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130503100729
+ Ignore-this: 4953c77273f6f55493c2fcb5412fa7ae
+] 
+[Data module imports in successful test cases.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130501190123
+ Ignore-this: ebf47147c08577791faa900b90ffd69d
+ This is neccessary if we want to fix Issue 836.
+] 
+[Refactor: Inlined some single-use local definitions and added a comment.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130501100818
+ Ignore-this: f3b4cc75d4d8be93d346ac82968a786
+] 
+[Fixed issue 841.  In interactive refine, new holes could be numbered wrongly.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130501093706
+ Ignore-this: 9ea862e4a5715c87b264a7c2b93cfc84
+ Fixed by improving position information for speculated new metas.
+ Now, the appended new metas are located at the end of the hole, making
+ sure they get numbered last.
+] 
+[Initial draft of HCAR entry for May 2013.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130430084603
+ Ignore-this: 8be6ac868c8ff14c4352d56c5295ea9f
+] 
+[The function inactivate-input-method is obsolete in Emacs 24.3.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130422122717
+ Ignore-this: 1a65e9fecd737c51bccdfac4efda6982
+] 
+[Text is now inserted at the end of the *agda2* buffer.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130422122707
+ Ignore-this: a84c0d3c5d14640951012270fd4f60e3
+] 
+[Made "cabal haddock" work.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130422122046
+ Ignore-this: c6a704c420ca677a19715b6a61591512
+] 
+[Fix issue 833 by fixing the type-checking for section arguments.
+Dominique Devriese <dominique.devriese@cs.kuleuven.be>**20130412125806
+ Ignore-this: 57166bd710682777c9f44752420ce4fa
+] 
+[Fixed issue 830.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130413110718
+ Ignore-this: ac17b77ed29368b0ef7fc87992a6d0dc
+ When checking that sort of constructor type fits in data sort,
+ constructor type was not unfolded.
+] 
+[Fixed bug: GHC options were given in reverse order.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130405221250
+ Ignore-this: b8c5e4fc5e5306f65888731c86139292
+] 
+[Changed the bindings for ⊸ and ⅋.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130403125717
+ Ignore-this: fdddf91783309453c7c9293da2ad3e61
+] 
+[Input methods for missing linear logic operators
+jeanphilippe.bernardy@gmail.com**20130328103755
+ Ignore-this: 142e9194613d1e22efbe87bbd8bd9df9
+] 
+[Fix for issue 641: -v is now reset when a file is reloaded (in Emacs).
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130324164811
+ Ignore-this: 5dcb806b4ebf580c89502543459bd6bd
+] 
+[Fixing issue 829: need to keep original clause in catch-all expansion.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130324125756
+ Ignore-this: 16dd9b9e7bbada11ea61cec0abf7656a
+ Bug was introduced in fix for 827.
+] 
+[Fixed issue 827: incomplete case tree caused by record pattern translation.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130322185311
+ Ignore-this: db28870f546533e8a4bd9e63c1fc6f50
+ Solution: expand catch-alls if a record match is on the same column.
+] 
+[Print name of the function when incomplete matching during evaluation.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130322185031
+ Ignore-this: d0f6c706fbeb096f1528f68665e118fe
+] 
+[A prettyTCM instance for Internal.Pattern (debugging only).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130322184513
+ Ignore-this: ab5576ba4bd50bd9896e6db8d63cd898
+] 
+[Fixed issue 279-3 (constructor from instantiated module assigned wrong parameters on lhs).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130322121202
+ Ignore-this: c381ac455666933086cde9e6fbd74b45
+ Fixed by adding an extra check for the parameters.
+] 
+[Release notes and test case for the restriction of eta-expanding implicit patterns to the case of record types with constructor (issue 473, 635).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130322092510
+ Ignore-this: c8d0e82c74d8c08f7c4faaaca36e3f37
+] 
+[Better error message if invoking case split in a goal that is already solved (see issue 289).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130322090709
+ Ignore-this: ca9657e0088a614edb0ed9718af0fe03
+] 
+[Fixed issue 635: only eta-expand implicit patterns of record type with a constructor.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130321221639
+ Ignore-this: 17b6b6c4362a5052b9c8d7ec2ac05374
+ Otherwise, case splitting might emit recCon-NOT-PRINTED patterns that cannot be parsed.
+] 
+[Fixing issue 665 and 824. Fold back eta-expanded implicit patterns in with-clauses, if they meet a dot-pattern of the parent clause.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130321181203
+ Ignore-this: ad6c213f1488053ca44c8fe578791626
+] 
+[Tiny refactor: added patNoRange for PatRange noRange.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130321144036
+ Ignore-this: 47df2d4174a97bcc341a32aa192e6316
+] 
+[Keep track in record patterns whether they are eta-expanded implicit patterns (reduces issue 825 to 824).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130321135527
+ Ignore-this: edc0be7d227f46a4a1c46634e2790d7
+ In strip for with clauses, eta expand implicit pattern on the fly if
+ parent clause has expanded implicit pattern.
+] 
+[When resolving an ambiguous name in a pattern, ignore defined names and fields (see issue 822).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130321092839
+ Ignore-this: f6dd880eb2bb3f9fc03bdb4113043115
+ This allows constructor names in pattern which are ambiguous in the
+ sense that they also have a non-constructor definition.
+] 
+[Fixed issue 822. 
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130321083828
+ Ignore-this: ce10bd962c65857f26e07b8ed8321f5a
+ Parsing patterns went wrong in the presence of ambiguous names
+ of different kinds.
+ If one defined a name first as non-constructor and then as
+ constructor, it would not accept it as possible constructor.
+] 
+[Put agda.sty in latex dir instead of current dir
+csfnf@swansea.ac.uk**20130319143334
+ Ignore-this: 4038edb6f68f7fb48ecfeff2ebb0b73b
+] 
+[Fixed issue 826, unfolding corecursion now instantiates metas.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130320161342
+ Ignore-this: 10b0dfd7263cc01b631af83858a64702
+] 
+[Testcases to ensure --no-termination-check prevents disabling of reductions.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130320150710
+ Ignore-this: 1297fc9ecad0cf28e9e76dd2f2a53407
+ For instance, in the positivity checker.
+] 
+[Tried to fix broken jump-to-position-mentioned-in-info-buffer functionality.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130315123954
+ Ignore-this: 158378b3c25e763792c8996501981513
+] 
+[Fixed compilation.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20130315144015
+ Ignore-this: 3ccc460fe0eb8cec3590fd27b56e4d8a
+] 
+[Russels paradox with --type-in-type, by Paolo Capriotti.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130315124305
+ Ignore-this: 6b69e43c3a5ac42c0c46477d70a0fd86
+] 
+[Release notes for flexible function arity.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130315123053
+ Ignore-this: 236764161f49f1637030334af09c904b
+] 
+[Reactivated flexible function arity (issue 727).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130315122054
+ Ignore-this: 6454bd465721be1c577d3f0ee147f721
+ Compilers probably need to be updated to this feature.
+] 
+[Fixed issue 821: invalid IMPOSSIBLE in comparison of spines.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130315112601
+ Ignore-this: a89e91dcd3895455bce9bf43a734f4d6
+] 
+[Another test case for issue 807.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130315104604
+ Ignore-this: 9cd5864552a9df9104d478208d02228c
+] 
+[Fixed issue 807 (connected to issue 655).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130315103554
+ Ignore-this: 632affa77c14dcc6c437ac18e1ec71e1
+ Problem was a circumvention of the code that generates helper
+ functions for coinduction when checking an alias.
+ New solution for 655:
+ Added new flag envExpandLast to type checking context, which is turned
+ off when checking aliases.
+] 
+[Comment and type signature for domainFree.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130315090700
+ Ignore-this: 68520650a39510a82f4ebfa66ab53662
+] 
+[Refactor: fused checkMeta and inferMeta into checkOrInferMeta.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130315090009
+ Ignore-this: bcc04c99b4aa1673dc8e8dec585f6172
+] 
+[Unified 4 definitions of unScope.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130315015459
+ Ignore-this: 95caf229066582e0e8b957fe6de9f4b7
+] 
+[Removed a stale comment.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130315010002
+ Ignore-this: e01f0148382d6a20200057a5d242c083
+] 
+[Factored out checkRecordExpression and checkRecordUpdate.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130315005921
+ Ignore-this: 31165ad98c0471532678bc5b7b7f659a
+] 
+[Factored out checkExtendedLambda.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130315003555
+ Ignore-this: 92c4abe3130dcba3f88084dcd4221c49
+] 
+[Refactor: use LensHiding (function visible).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130315002104
+ Ignore-this: a30b1582dc0c636856524af9418d88e
+] 
+[Factored out function checkAbsurdLambda.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130315001944
+ Ignore-this: 67e124620a738f7b35233a3be89915a8
+] 
+[Comment on WildP and undone attempt to fix 819.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130314065503
+ Ignore-this: 9453878950f48ae43343b9ab9b5e3d50
+] 
+[Minimal fix for 818: error message instead of panic when with clause has wrong number of arguments.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130308202059
+ Ignore-this: 647dc2def08d5c3a79c56d126ec8022f
+] 
+[Allowed QuickCheck-2.6.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20130307153732
+ Ignore-this: c3d9dcf1a8936f00f8de4d411d55811b
+] 
+[Add blackbold B and 0-9 to agda-input.el
+Stevan Andjelkovic <stevan.andjelkovic@strath.ac.uk>**20130305164058
+ Ignore-this: 10319bf95e1a1aa38f260858269bb054
+] 
+[Fixed issue 810: intro tactic for constructors skips hidden abstractions.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130305155213
+ Ignore-this: 5b2cbe416c14c8e65e70061f75fda348
+] 
+[Fixed issue 814 (crash in elimView in case of unapplied projection).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130305115741
+ Ignore-this: c020497ae66b9b7332945239842144f4
+] 
+[More verbosity info.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130305113145
+ Ignore-this: b2321c03ee9b461d8ee34459e41be8ff
+] 
+[Verbosity info in test case.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130305113035
+ Ignore-this: 40b1c9d244dfbd8feb9e32aba098b9a
+] 
+[Removed debug printing in test case 778b.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130305112940
+ Ignore-this: 196c6d2db1980303cbe7acf2da386455
+] 
+[Addressing issue 811: assign earlier variables during unification.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130305112753
+ Ignore-this: 63f6a17a834700c3556f9673193f4487
+ The goal is better splitting behavior, dotting later rather than
+ earlier variables.
+ But also, we want to dot hidden variables rather than visible ones.
+ This does not work perfectly yet, but the behavior is no worse than
+ the current one.
+ A full solution would probably need a global look at all flexible
+ variables!?
+] 
+[Inessential: added debug message.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130305111357
+ Ignore-this: fa0c10695a4cef1ade0fd458fb3e5fb0
+] 
+[Refactor: changed FlexibleVars to dedicated decoration (instead of Arg).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130305110156
+ Ignore-this: 2497a6c3883f1df211afa74c3f188a00
+] 
+[Refactor: Unifier's FlexibleVars are now Arg Nats instead of just Nats.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130305001458
+ Ignore-this: 7d0e3998d29f8feb1fae65767a0c3e68
+] 
+[Make test/lib-succeed/Issue784 work with latest std-lib
+csfnf@swansea.ac.uk**20130304170350
+ Ignore-this: 2b00ba0ebc562b3ee97e16d141a3cd42
+] 
+[Fix for issue 778 (improved extended lambda implementation)
+csfnf@swansea.ac.uk**20130304195236
+ Ignore-this: 9d449c13c5de411176124fb0d97272b9
+] 
+[Documented the new key translations in the release notes.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130304185618
+ Ignore-this: e637f4d32b055c176439dcd9fd628af5
+] 
+[More characters. Contributed by John Wiegley.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130304185118
+ Ignore-this: 80ec1fecf2dd0b3974a334849b0d7a6a
+] 
+[Refactor Syntax.Common: added lenses for Hiding and Relevance.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130301170703
+ Ignore-this: 7b34f615de19934bfb44be631101903a
+] 
+[Refactor: put application cases of checkExpr into checkApplication.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130301125931
+ Ignore-this: 5daae86ff311d0f4c74e4517178fb9a4
+ This reduces the monster checkExpr a bit.
+] 
+[Added Args to Syntax.Abstract.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130301125554
+ Ignore-this: a3ee7c75474f27bb723162fb1ffd9c6f
+] 
+[Refactor: use case in inferHead instead of top-level pattern matching.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130301123815
+ Ignore-this: d1a5c5aba1ca2628730b7db5c3644e1d
+] 
+[The Epic backend no longer prints the epic package's version number.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130228165453
+ Ignore-this: 2760edb08025b4f79eb11be4c657e13b
+] 
+[Removed absolute path from test output.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130228164312
+ Ignore-this: 4e3ad0d8af718070e22c0b8e71c78824
+] 
+[Fixed issue 804, NO_TERMINATION_CHECK is now accepted also within mutual block.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130228161322
+ Ignore-this: 6c04b11e3550093a9d6c1b84b4488cf7
+] 
+[Added a second test case for issue 802.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130228115850
+ Ignore-this: cd4d87faf34425c9887ac640b181b6ca
+] 
+[Modified the pretty-printing of CoverageCantSplitOn errors.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130218164257
+ Ignore-this: 19a23364d6f552682a16bd558c755a9d
+] 
+[Added SplitError constructor to TypeError, avoided use of GenericError.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130218164006
+ Ignore-this: 54b1a05d0d1869144e49327c2a0cc238
+] 
+[All debug messages at level 1 are now displayed in the Agda info buffer.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130218155744
+ Ignore-this: 68a4fdee3a0ff5021748704194954ca2
+] 
+[Stopped using 'reportX "" 0' inside verboseS blocks.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130215150527
+ Ignore-this: 20937035682a51f554b492a245c8d6c1
+] 
+[Fixed issue 800. With display form problem (permuted args).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130228105212
+ Ignore-this: 386c8c823452ba5800ffc791900481c7
+] 
+[Fix the last faulty patch (ProjP sneaked in there) addressing Issue802.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130227184349
+ Ignore-this: 65372e83f1f2ef5d3d96976c2f2182a1
+] 
+[Fixed issue 802. Index arguments of data types should always have polarity Mixed.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130227155149
+ Ignore-this: ccf98ca3daecace8fbea599b692177f2
+] 
+[Issue 385 is fixed along with 653.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130227121513
+ Ignore-this: 6d70f2e3214c50c2e78fcec64ee328b7
+] 
+[No longer unfold functions which fail the termination check (fixes issue 653).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130227120321
+ Ignore-this: a927b1b5affc58c24587fb3a081fb443
+ The problem was that the positivity checker looped.
+ Now termination checking is done first.
+] 
+[Fixed issue 801 by doing termination checking before injectivity checking.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130227103636
+ Ignore-this: 53f28e17c7b23876fe306d1a9821f468
+] 
+[Refactoring: pulled getDefFreeVars out (InternalToAbstract).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130227093829
+ Ignore-this: 7e299fe87cf25c8292b61c94e480c0e
+] 
+[Fixed a problem with debug messages for 'with' causing a panic.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130226214624
+ Ignore-this: f67ead53fb1ee02aa4877dc3423c3f98
+] 
+[Refactor: put abstractToConcrete into TCM for debugging purposes.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130226214441
+ Ignore-this: cec96b341b3334f9203d4f2b8b8f3f34
+] 
+[Fixed a problem with free variables in type checking extended lambdas.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130226152254
+ Ignore-this: de5e611a144f34602adfc4664522ab31
+ This surfaced in connection with issue 778.
+ The problem was that in the presence of where-blocks the wrong number
+ of free variables was picked.
+] 
+[Fixed issue 799.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130226035226
+ Ignore-this: 860b20e1858721352f782d023e30f6a5
+ Agda had ignored hidden underscores following a constructor even if
+ these were more than the parameters of the data type.
+] 
+[Issue 4 is fixed (again) by making 'ConcreteMode' the default (issue 796).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130221094354
+ Ignore-this: 8760dbeaefcafacb849af35a23a5f0ad
+] 
+[Fixed issue 782, lexing of keyword 'to' in 'renaming' directive.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130221093347
+ Ignore-this: 83a09eb5dd557850634cfc80c7c2837d
+] 
+[Simplified allRight auxiliary function.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121201212708
+ Ignore-this: e4494f45f1baa4aaa91778f5211a02c4
+] 
+[Initial mode is now ConcreteMode, not AbstractMode (fixes original case of issue 796).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130220234349
+ Ignore-this: 84b2d7abdc88efa295d28d1212600d9e
+ That is in accordance to my intuition (abstract is not the default).
+] 
+[Fixed issue 780 (internal error in getTypeMeta).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130220000500
+ Ignore-this: 63a3b8e026311e9a3d69ea2bd68d316c
+ By disabling instance search for irrelevant sort metas.  (Not intended anyway.)
+] 
+[Updated error message in connection with issue 795.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130219231101
+ Ignore-this: 99367532eb019a5970d0dbfb07a4bf34
+] 
+[Constructor-headedness (injectivity check) no longer ignores abstract. Fixes 796.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130219230923
+ Ignore-this: ca3e16a140bddfc815ebe60ed0973c9d
+ Effect: less programs will type-check, however, changing an abstract
+ definition in one module will not break type-checking a module
+ importing the first one (at least not due to failing constructor-headedness).
+] 
+[Fixed KillRange instances for Relevance and ArgInfo.
+andreas.abel@ifi.lmu.de**20130219170725
+ Ignore-this: 4db13bf7476f0daa3d991c38d20db419
+] 
+[Factorize Arg.
+Guilhem Moulin <guilhem.moulin@chalmers.se>**20130219161229
+ Ignore-this: 3a5d21da7e75a23275bf2c8c1243c383
+] 
+[Fixed issue 797.  Print location of unsolved emptyness constraint.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130219155420
+ Ignore-this: eb1f3077f44f598d19432e19660060db
+] 
+[Test case for issue 795.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130218154828
+ Ignore-this: 9941a3cff6432e92be519f28495fa4f2
+] 
+[Removed error on failing occurs check, because it is not always sound to throw it. Fixes issue 795.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130218153438
+ Ignore-this: 9156d7d0077a56bb21ef087fa2daf09e
+ I think it had been disabled before, but I had reenabled it in May 2012.
+ Now constraint solving is more complete.
+ However, because the error is not thrown even in situations where it
+ would be justified, instance search is weaker now.  (See last example
+ in test/fail/Issue723.)
+] 
+[Release notes for removal of matrix-shaped orders in termination checker (Issue 787).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130218151648
+ Ignore-this: 190ef6c481e5372f519e54bc73eaa1da
+] 
+[Disabled matrix-shaped orders in the termination checker. Fixes issue 787.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130218132050
+ Ignore-this: baeb8f786702a36da37d1f15b76f50a0
+ Matrix-shaped orders do not work together correctly with the
+ idempotency check from size-change termination.  
+ Research is needed how these two features could be integrated.  
+ It seems best to remove matrix-shaped orders for now.
+ The standard library does not use them.
+] 
+[Fixed Issue794 by disabling an "optimization" for compiling irrelevant arguments.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130216133146
+ Ignore-this: f54b8908bc70ec542f02bf409d30cb51
+] 
+[Latex-backend: fix escaping of ~, ^ and \
+Stevan Andjelkovic <stevan.andjelkovic@strath.ac.uk>**20130127195655
+ Ignore-this: 8e9c110d7d22ee0dfdf02d7ae501056c
+] 
+[Use UTF-8 also for stdin (when --interaction is used).
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130128134526
+ Ignore-this: d4d4bff88ab1bd274344578d513320d3
+] 
+[Restored old lower bound for Win32.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20130128134429
+ Ignore-this: 3c63ecdae66e8a5a0c3eb054b306143
+] 
+[Explicitly set stdout to utf8
+Jason Dagit <dagitj@gmail.com>**20130119052112
+ Ignore-this: b5459c1f61d3ff263623f8b88885d428
+] 
+[Bump the Win32 version requirement for ghc-7.6
+Jason Dagit <dagitj@gmail.com>**20130119052027
+ Ignore-this: 20ffa91e820ac39e0d6daa8f3e2e413c
+] 
+[Fixed issue 784.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20130120204611
+ Ignore-this: e77705e68affd1f06aad288e425d175a
+] 
+[Patch for hashable-1.2.x simplified.
+Dirk Ullrich <dirk.ullrich@gmail.com>**20121222221956
+ Ignore-this: e3822d98932ad1bbb05cb26ef39b1e73
+ Instances for hashable-1.x can be defined by using `hashWithSalt', too.
+] 
+[Fix issue 773: make instance arguments examples work again.
+Dominique Devriese <dominique.devriese@cs.kuleuven.be>**20121225222236
+ Ignore-this: 2d82a154811ef47e7942abd2c404ef96
+] 
+[Patch for allowing hashable-1.2.x
+Dirk Ullrich <dirk.ullrich@gmail.com>**20121215154704
+ Ignore-this: b880357f43c4e7ce46c92c49915dda2
+] 
+[A new benchmark file.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20121218130118
+ Ignore-this: 39039eb30c7c62f685b68d7e9958def2
+] 
+[eliminate a hack in InteractionTop.hs by putting 'stInteractionOutputCallback' into 'PersistentTCState' 
+divipp@gmail.com**20121217124756
+ Ignore-this: 9c932442a8b9e9c099b575ce07c47ee1
+] 
+[LaTeX-backend: add two new colour schemes to agda.sty (b/w and conor).
+Stevan Andjelkovic <stevan.andjelkovic@strath.ac.uk>**20121123154729
+ Ignore-this: 7b4efff033952c5d4f68ec5d6b91cd65
+] 
+[Fixed issue 729 by thawing the type of an abstract alias before checking.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121122173800
+ Ignore-this: 35b9c996795cdf21d85201067a07c787
+] 
+[Rolled back second fix attempt for 729 which makes types in types sigs optional.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121122164926
+ Ignore-this: cacea57b500dfe89dac67401916e294c
+] 
+[Started to make types in type signatures optional (another attempt to fix 729).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121122164811
+ Ignore-this: 3bea61061f4f2ed01fb8cc97bd89f3e8
+] 
+[Rolled back fix attempt for 729, having a better idea.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121122162131
+ Ignore-this: 4702c12613f4552849c3b2eaa1e342c5
+] 
+[An attempt to fix issue 729 by introducing FunDef with NoTypeSig.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121122161335
+ Ignore-this: 974353834d83b01d12d4dce6cd234054
+] 
+[An unused unfreeseMeta function.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121122161911
+ Ignore-this: a7e520e4d9776724cabb68e88a1f1667
+] 
+[Use modifyMetaStore in updateMetaVar.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121122161545
+ Ignore-this: 1a9b113af12557bd75b9f815ac727cbf
+] 
+[IMPOSSIBLE instead of error in ConcreteToAbstract.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121122161508
+ Ignore-this: 3058021df4fc6db13605e95ab6012117
+] 
+[Some comments in Concrete.Definitions.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121122161429
+ Ignore-this: c9ea5c9031af1a342d85c2dac5decdfa
+] 
+[Fixed issue 765.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20121122160703
+ Ignore-this: 6f49e40ddb739b6288e0cac92878bf2a
+] 
+[Cosmetic change (?), contributed by John Wiegley (?).
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20121120100807
+ Ignore-this: aab42a36c68842b4a0ed6f32cece1998
+] 
+[Fixed showPat.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20121119013638
+ Ignore-this: 2b48207fa3baf7e603b0a52903a47e82
+] 
+[Revert the commenting-out of some tests.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121119105514
+ Ignore-this: e689d96b76cbf00d8d67e043feea9284
+] 
+[Edit made by the HCAR editor, Janis Voigtländer.
+Nils Anders Danielsson <nils.anders.danielsson@gmail.com>**20121119094142
+ Ignore-this: 2d2d2a2a71af92e106fa212b167b7c41
+] 
+[Allowed abstract mutual. (Issue 761)
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121118224320
+ Ignore-this: 3e9a41150ae1fa0945e2c454a58bc6b0
+ Disallowed redundant abstract (like in abstract abstract).
+ Changed error message about useless abstract.
+] 
+[Fixed a typo in UselessPrivate error message.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121118224018
+ Ignore-this: ddf37eb16eb1471b5d0c60cfa72481c2
+] 
+[Abstract record declarations are now treated as abstract data declarations. (Issue 759)
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121118215532
+ Ignore-this: c9e5008493456d72d2bc6f99ddb554a1
+ Now there is a better error message when one tries to construct an abstract record.
+] 
+[Added AGDA_TEST_FLAGS to Makefile debug output.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121118211018
+ Ignore-this: 342c7f039e9563637b618e96233088f6
+] 
+[Rolled back special verbosity for 0 and 1. (Did not perform better.)
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121118210211
+ Ignore-this: efa2e6a304ba6139752e78ba877b8af8
+] 
+[Deactivated debug messages in eta contractions.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121118205039
+ Ignore-this: 3551f2e60a4c6a6be230757879043655
+ Seems to save 5% on std-lib.
+] 
+[Single out verbosity levels 0 and 1. (Attempt to optimize reportS).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121118204756
+ Ignore-this: 2544751089256efab78b6263410b074a
+] 
+[Fixed eta-contraction for abstract record values (see issue 759).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121118185013
+ Ignore-this: 88dc8767504acd455c69b90020617098
+] 
+[Moved notInScope to Base.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121118164525
+ Ignore-this: b5dd9606a65df1c002bff9dbd6a7fe8c
+] 
+[A use of unless.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121118160738
+ Ignore-this: 90e19045647b84629f158cd969bb1594
+] 
+[Added sym and trans to test/Common.Equality.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121118160538
+ Ignore-this: 6028da6dbf3c1f367c6eb814bdbefe15
+] 
+[A debug printout for checking declarations.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121118155610
+ Ignore-this: fe04b1abacc35b508da1886f6cad1bad
+] 
+[Fixed issue 755.  Polarity info should not be available for abstract definitions.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121118155500
+ Ignore-this: 493d0bb5bb7ee5204c48b5c8d32f3460
+] 
+[Removed unused IsAbstract field from NiceModuleMacro.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121117234357
+ Ignore-this: 5a13106fe51449555ec86ea3d92ed929
+] 
+[Complain if private is used without effect. (Issue 760.)
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121117165850
+ Ignore-this: 863d7e2afc9bf2df1487522d74475df0
+] 
+[Fixed issue 754 (internal error due to ill-formed sparse matrices).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121113185126
+ Ignore-this: 859f0996e9420e128c0e83bf1eedbf2b
+ Supremum and infinium of two different-shaped matrices now implemented.
+] 
+[Exclude mtl-2.1.  It is severly bugged.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121113160958
+ Ignore-this: 3c48faf3942573b4896f7f3b9291ed1e
+ Agda will just <<loop>> if you install it in a system with mtl-2.1.
+ Can you spot the bug in mtl-2.1?
+ 
+   state :: (s -> (a, s)) -> m a
+   state f = do
+     s <- get
+     let ~(a, s) = f s
+     put s
+     return a
+ 
+   modify :: MonadState s m => (s -> s) -> m ()
+   modify f = state (\s -> ((), f s))
+ 
+ I wonder how this passed the testsuite of Eward (which testsuite?).
+ Another instance of the reason why recursive-by-default let is harmful...
+] 
+[Release notes stub for Version 2.3.4.
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121112020941
+ Ignore-this: 701ca09fa212c2d8ef58bef3a4884c9e
+] 
+[Restored -Werror in Agda.cabal (disabled for release).
+Andreas Abel <andreas.abel@ifi.lmu.de>**20121112020236
+ Ignore-this: 7db1b446424ebf593ca557ddb29ee91c
+] 
+[Removed unnecessary GADTs pragma.
+Andrés Sicard-Ramírez <andres.sicard.ramirez@gmail.com>**20121110162146
+ Ignore-this: df35bc750050539f74e34ff2ac6da28a
+] 
+[Bumped version number to 2.3.3.
+andreas.abel@ifi.lmu.de**20121112013740
+ Ignore-this: c9d622fe77a8ad4c2339cf538b2e5776
+] 
+[TAG 2.3.2
+andreas.abel@ifi.lmu.de**20121112002455
+ Ignore-this: 47f901c8b3f0c10c935a645e75cef8da
+] 
+Patch bundle hash:
+24d8d3952ba63770d6b169612fd4fbf77b8b064e

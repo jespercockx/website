@@ -1,0 +1,17 @@
+agda-ffi/dist
+*.agdai
+MAlonzo
+*.prof
+*.treeless
+*.hi
+*.o
+*#
+*~
+.#*
+_agda
+_cache
+_site
+dist
+cabal.sandbox.config
+.cabal-sandbox
+deploy_website.sh
